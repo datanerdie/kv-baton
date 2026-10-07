@@ -76,7 +76,8 @@ class FakeRenderer:
         ids = list(range(self.n))
         sbody = {k: v for k, v in body.items() if k not in THINKING_FIELDS}
         sbody["chat_template_kwargs"] = dict(kw)
-        return Prepared(ids, " ".join(map(str, ids)), sbody, kw["enable_thinking"])
+        sbody["kvh_prompt_ids"] = ids
+        return Prepared(ids, " ".join(map(str, ids)), sbody, kw["enable_thinking"], body.get("tools") is not None)
 
 
 def steps(log, n, slow=0.0, fail=None):
@@ -235,6 +236,18 @@ def test_strata_gets_sushis_thinking_settings_spelled_out(setup):
     assert up.bodies[-1]["reasoning_effort"] == "medium"          # Sushi still gets the client's request unchanged
 
 
+def test_tools_request_hands_off_with_ids_and_the_tools_flag(setup, monkeypatch):
+    up, start = setup
+    log, seen, flags = [], {}, []
+    real_run = handoff.run
+    monkeypatch.setattr(handoff, "run", lambda *a, **kw: (flags.append(kw.get("has_tools")), real_run(*a, **kw))[1])
+    st = steps(log, 500)
+    st.strata_prefill = lambda b: (seen.update(b), log.append("prefill"), 500)[2]
+    url, _ = start(500, st)
+    post(url, dict(BIG, tools=[{"type": "function", "function": {"name": "f", "parameters": {}}}]))
+    assert log[0] == "prefill" and seen["kvh_prompt_ids"] == list(range(500)) and flags == [True]
+
+
 @pytest.mark.parametrize("reply", [[1, 2, 3], 404])
 def test_sushi_tokenizer_disagreeing_or_failing_passes_through(setup, reply):
     up, start = setup
@@ -366,8 +379,8 @@ def test_cache_root_fn_root_reaches_handoff_run(setup, tmp_path, monkeypatch):
     other = tmp_path / "other"; other.mkdir()
     seen = []
     real_run = handoff.run
-    def spy(body, ids, cfg, st, gate, progress):
-        seen.append(cfg.cache_root); return real_run(body, ids, cfg, st, gate, progress)
+    def spy(body, ids, cfg, st, gate, progress, **kw):
+        seen.append(cfg.cache_root); return real_run(body, ids, cfg, st, gate, progress, **kw)
     monkeypatch.setattr(handoff, "run", spy)
     log = []; url, _ = start(500, steps(log, 500), cache_root_fn=lambda: str(other))
     post(url, BIG)

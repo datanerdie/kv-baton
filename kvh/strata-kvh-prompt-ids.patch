@@ -1,0 +1,160 @@
+From 572132b6e5f50d51bf22f60383a4f5562ed2c831 Mon Sep 17 00:00:00 2001
+From: kvh <kvh@localhost>
+Date: Wed, 7 Oct 2026 21:57:13 +0800
+Subject: [PATCH] KVH: optional kvh_prompt_ids on /v1/chat/completions replaces
+ the template render
+
+The big-document handoff proxy sends the prompt as token ids it has checked
+against the Mac server (Sushi), so Strata prefills exactly those tokens:
+no tool-unwrapping, effort-at-end or literal-tag differences.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ serve/server.py              | 26 ++++++++++--
+ serve/test_kvh_prompt_ids.py | 80 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 102 insertions(+), 4 deletions(-)
+ create mode 100644 serve/test_kvh_prompt_ids.py
+
+diff --git a/serve/server.py b/serve/server.py
+index d6b1fc3..51d1175 100644
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -1980,6 +1980,17 @@ def vision_env(cfg: dict, env: dict) -> dict:
+     return env
+ 
+ 
++def kvh_prompt_ids(req):
++    """KVH local patch: a chat request's optional "kvh_prompt_ids" (a non-empty list of token ids), else None.  Sent only
++    by the big-document handoff proxy, which has checked these ids against the Mac server's own tokenizer."""
++    v = req.get("kvh_prompt_ids")
++    if v is None:
++        return None
++    if not isinstance(v, list) or not v or not all(type(t) is int and 0 <= t < 1 << 20 for t in v):
++        raise ValueError("kvh_prompt_ids must be a non-empty list of token ids")
++    return v
++
++
+ class ByteTokenizer:
+     """Tiny stand-in tokenizer for tests without the pack: one id per UTF-8 byte, specials as ids >= 256."""
+     SPECIALS = ["<|im_start|>", "<|im_end|>", "<|endoftext|>", "<|vision_start|>", "<|image_pad|>", "<|vision_end|>"]
+@@ -2734,12 +2745,18 @@ class Service:
+                     content[n] = {"type": "text", "text": f"[image omitted: {why}]"}
+         return fetched
+ 
+-    def prepare(self, messages, tools, kwargs, max_new=None, force=None):
++    def prepare(self, messages, tools, kwargs, max_new=None, force=None, prompt_ids=None):
+         """-> (ids, thinking, max_new). An unset or non-positive max_new (some clients send -1) means "unlimited":
+         the rest of the context.  `force` (forced_call): without thinking the reply starts with it, so it ends the
+-        prompt; with thinking, Service.run writes it once the thinking is over."""
++        prompt; with thinking, Service.run writes it once the thinking is over.  `prompt_ids` (KVH, local patch): the
++        prompt as token ids, used instead of the template, so a prefill matches another server's tokens exactly."""
+         fetched = self._note_unreadable_tool_images(messages)
+-        ids = self.encode_prompt(messages, tools, kwargs)
++        if prompt_ids is not None:
++            if force or images_of(messages):
++                raise ValueError("kvh_prompt_ids cannot be combined with images or a forced tool_choice")
++            ids = list(prompt_ids)
++        else:
++            ids = self.encode_prompt(messages, tools, kwargs)
+         if force and kwargs.get("enable_thinking", True) is False:
+             ids = ids + self.tok.encode(force, parse_special=True)
+         self.embeddings.path = None
+@@ -4213,7 +4230,8 @@ def make_handler(svc: Service):
+                 raise ValueError("a forced tool_choice with MCP tools is not supported")
+             svc.reasoning_budget(req)                         # a bad value is a 400 before anything is sent
+             stop_strings(req)                                 # ... and so is a bad stop / stop_sequences
+-            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force)
++            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force,
++                                                 prompt_ids=kvh_prompt_ids(req))
+             _debug_req("openai", req, messages, tools, max_new, thinking, len(ids))
+             cancel = threading.Event()
+             self._watch_client(cancel)                       # #430 #431
+diff --git a/serve/test_kvh_prompt_ids.py b/serve/test_kvh_prompt_ids.py
+new file mode 100644
+index 0000000..68ce4a8
+--- /dev/null
++++ b/serve/test_kvh_prompt_ids.py
+@@ -0,0 +1,80 @@
++"""serve/test_kvh_prompt_ids.py - KVH local patch: "kvh_prompt_ids" replaces the template render (mock engine).
++
++    python -m unittest serve.test_kvh_prompt_ids -v
++"""
++from __future__ import annotations
++
++import json
++import sys
++import unittest
++import urllib.error
++import urllib.request
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++from serve.frontend import ChatTemplate  # noqa: E402
++from serve.server import ByteTokenizer, MockEngine, Service, serve  # noqa: E402
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++class RecordingEngine(MockEngine):
++    def generate(self, ids, max_new, sampling, cancel, embeddings=None):
++        self.last_ids = list(ids)
++        yield from super().generate(ids, max_new, sampling, cancel, embeddings)
++
++
++class KvhPromptIds(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        tok = ByteTokenizer()
++        cls.engine = RecordingEngine(tok, "</think>\n\nok", max_context=4096)
++        cls.svc = Service(cls.engine, tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
++        cls.httpd = serve(cls.svc, port=0)
++        cls.base = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.httpd.shutdown()
++        cls.httpd.server_close()
++
++    def post(self, body):
++        req = urllib.request.Request(self.base + "/v1/chat/completions", data=json.dumps(body).encode(),
++                                     headers={"Content-Type": "application/json"})
++        try:
++            with urllib.request.urlopen(req, timeout=30) as r:
++                return r.status, json.loads(r.read())
++        except urllib.error.HTTPError as e:
++            with e:
++                return e.code, json.loads(e.read())
++
++    def body(self, **kw):
++        return {"model": "m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1, **kw}
++
++    def test_ids_replace_the_render(self):
++        ids = [104, 105, 33, 256, 10]
++        status, b = self.post(self.body(kvh_prompt_ids=ids))
++        self.assertEqual(status, 200)
++        self.assertEqual(b["usage"]["prompt_tokens"], len(ids))
++        self.assertEqual(self.engine.last_ids[:len(ids)], ids)
++
++    def test_without_ids_the_template_renders(self):
++        status, b = self.post(self.body())
++        self.assertEqual(status, 200)
++        self.assertGreater(b["usage"]["prompt_tokens"], 5)
++
++    def test_bad_ids_are_a_400(self):
++        for bad in ([], [-1], ["7"], [1.5], [1 << 20], "1 2 3"):
++            status, b = self.post(self.body(kvh_prompt_ids=bad))
++            self.assertEqual(status, 400, bad)
++            self.assertIn("kvh_prompt_ids", json.dumps(b))
++
++    def test_forced_tool_call_is_refused(self):
++        tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}]
++        status, _ = self.post(self.body(kvh_prompt_ids=[104, 105], tools=tools,
++                                        tool_choice={"type": "function", "function": {"name": "f"}}))
++        self.assertEqual(status, 400)
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.43.0
+

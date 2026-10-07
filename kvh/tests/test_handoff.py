@@ -1,3 +1,4 @@
+import json
 import os
 from array import array
 
@@ -51,6 +52,16 @@ def test_run_happy_path(tmp_path):
     assert os.path.isdir(os.path.join(c.cache_root, "e1005"))     # renamed in before the restart
     assert os.listdir(c.incoming) == []                            # nothing left behind
     assert set(t) >= {"prefill", "save", "dump", "convert", "restart"}
+
+
+@pytest.mark.parametrize("has_tools", [False, True])
+def test_has_tools_reaches_the_entry(tmp_path, has_tools):
+    c, log, ids = cfg(tmp_path), [], list(range(300))
+    make_entry(c.cache_root, 5, [1], [])
+    handoff.run({"model": "qwen38-flash-bigdoc", "messages": []}, ids, c, fake_steps(log, ids), Gate(), lambda s: None,
+                has_tools=has_tools)
+    meta = json.load(open(os.path.join(c.cache_root, "e1005", "meta.json")))
+    assert meta.get("has_tools", False) is has_tools
 
 
 def test_strata_request_is_prefill_only(tmp_path):

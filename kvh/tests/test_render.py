@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from render import SUSHI_MODEL_DIR, Renderer, sushi_template_kwargs
+from render import SUSHI_MODEL_DIR, Renderer, sushi_template_kwargs, tool_choice_kind
 
 @pytest.fixture(scope="module")
 def r():
@@ -32,12 +32,20 @@ def test_thinking_kwargs_change_the_render(r):
 
 @pytest.mark.parametrize("b", [
     body([{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}]),
-    body("x", tools=[{"type": "function", "function": {"name": "f", "parameters": {}}}]),
-    {"model": "m", "messages": [{"role": "tool", "content": "r", "tool_call_id": "1"}]},
+    body("x", functions=[{"name": "f", "parameters": {}}]),
+    body("x", tools=[{"type": "function", "function": {"name": "f", "parameters": {}}}], tool_choice="required"),
+    body("x", tools=[{"type": "function", "function": {"name": "f", "parameters": {}}}],
+         tool_choice={"type": "function", "function": {"name": "f"}}),
+    body("x", tools="f"),
     {"model": "m", "messages": []},
 ])
 def test_not_candidates(r, b):
     assert r.render_ids(b) is None
+
+
+def test_a_conversation_without_a_user_query_is_the_templates_error(r):
+    with pytest.raises(Exception, match="No user query"):           # the proxy passes a render failure through
+        r.prepare({"model": "m", "messages": [{"role": "tool", "content": "r", "tool_call_id": "1"}]})
 
 
 def test_matches_sushi_tokens_for_the_8k_prompt(r):
@@ -106,3 +114,51 @@ def test_prepare_spells_sushis_settings_out_for_strata(r):
 ])
 def test_prepare_refuses_prior_reasoning_and_trailing_assistant(r, msgs):
     assert r.prepare({"model": "m", "messages": msgs}) is None
+
+
+TOOLS = [{"type": "function", "function": {"name": "read_file", "description": "Read a file — größe ≤ 1 MB.",
+          "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}]
+
+
+def agent(args):
+    return [{"role": "user", "content": "Summarise /tmp/a.txt"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": args}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "the text"}]
+
+
+@pytest.mark.parametrize("value, kind", [(None, "auto"), ("auto", "auto"), ("none", "none"), ("required", "required"),
+                                         ("any", "required"), ({"type": "none"}, "none"), ({"type": "any"}, "required"),
+                                         ({"type": "function", "function": {"name": "f"}}, "named"),
+                                         ({"type": "tool", "name": "f"}, "named"), ({"type": "function"}, "auto")])
+def test_tool_choice_kind_follows_sushi(value, kind):
+    assert tool_choice_kind(value) == kind
+
+
+def test_tools_render_wrapped_as_sushi_does_and_strata_gets_ids(r):
+    p = r.prepare({"model": "m", "messages": agent('{"path": "/tmp/a.txt"}'), "tools": TOOLS,
+                   "chat_template_kwargs": {"enable_thinking": False}})
+    assert p.has_tools and p.strata_body["kvh_prompt_ids"] == p.ids
+    assert '{"type": "function", "function": {"name": "read_file"' in p.text
+    assert "<tool_response>\nthe text\n</tool_response>" in p.text and p.text.endswith("<think>\n\n</think>\n\n")
+
+
+def test_tool_call_arguments_as_string_or_mapping_render_alike(r):
+    a = r.prepare({"model": "m", "messages": agent('{"path": "/tmp/a.txt"}'), "tools": TOOLS})
+    b = r.prepare({"model": "m", "messages": agent({"path": "/tmp/a.txt"}), "tools": TOOLS})
+    assert a.ids == b.ids
+
+
+def test_malformed_tool_call_arguments_pass_through(r):
+    assert r.prepare({"model": "m", "messages": agent('{"path": '), "tools": TOOLS}) is None
+
+
+def test_tool_choice_none_drops_the_tools_like_sushi(r):
+    msgs = [{"role": "user", "content": "hi"}]
+    p = r.prepare({"model": "m", "messages": msgs, "tools": TOOLS, "tool_choice": "none"})
+    assert not p.has_tools and p.ids == r.prepare({"model": "m", "messages": msgs}).ids
+
+
+def test_plain_requests_also_send_ids_to_strata(r):
+    p = r.prepare(body("hi"))
+    assert not p.has_tools and p.strata_body["kvh_prompt_ids"] == p.ids

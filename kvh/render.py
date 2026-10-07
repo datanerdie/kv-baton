@@ -1,13 +1,18 @@
 """Render a chat request into the token ids Sushi will see (the pack's chat template via transformers).
 
-Only plain text conversations are candidates for a handoff; anything with tools, tool messages, images, prior
-reasoning or a trailing assistant message returns None and is passed through untouched.
+Text conversations, with or without tools, are candidates for a handoff; images, prior reasoning, a trailing
+assistant message or a tool_choice that makes Sushi add its own instruction ("required", a named function) return None
+and are passed through untouched. Tools render as Sushi renders them (checked token for token on a 10K agent
+conversation, 2026-10-07): the request's tools as given, tool-call arguments as a mapping; tool_choice "none" drops
+them. Strata does not render tools the same way (it unwraps each tool to its function object), so it gets the prompt
+as token ids (`kvh_prompt_ids`, local Strata patch) and renders nothing itself.
 
 Thinking follows Sushi 1.1.1's own rules (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
 qwen38EffortFor), which differ from the template's defaults: `reasoning_effort` counts only at the top level (inside
 chat_template_kwargs it is ignored), thinking on without an effort word is "low", and a request naming neither is
 thinking off. Strata follows the template, so it gets the resolved settings written out explicitly.
 """
+import json
 import os
 from dataclasses import dataclass
 
@@ -26,8 +31,58 @@ THINKING_FIELDS = ("enable_thinking", "reasoning_effort")
 class Prepared:
     ids: list           # what Sushi will tokenise
     text: str           # the rendered prompt, for the check against Sushi's /tokenize
-    strata_body: dict   # the request for Strata, with Sushi's thinking settings spelled out
+    strata_body: dict   # the request for Strata: these ids as kvh_prompt_ids, Sushi's thinking settings spelled out
     thinking: bool
+    has_tools: bool = False     # Sushi's cache key: only an entry with the same flag is ever restored
+
+
+def tool_choice_kind(value):
+    """Sushi's parseToolChoice: "none", "required" (also "any"), "named", or "auto" (anything else)."""
+    if isinstance(value, str):
+        return value if value in ("none", "required") else "required" if value == "any" else "auto"
+    if isinstance(value, dict):
+        kind = value.get("type")
+        if kind in ("none", "any", "required"):
+            return "none" if kind == "none" else "required"
+        fn = value.get("function") if isinstance(value.get("function"), dict) else value
+        if isinstance(fn.get("name"), str) and fn["name"]:
+            return "named"
+    return "auto"
+
+
+def _text(c):
+    """A message's content as Sushi joins it, or None when it is not plain text."""
+    if c is None:
+        return ""
+    if isinstance(c, list):
+        if any(not isinstance(p, dict) or p.get("type") != "text" for p in c):
+            return None
+        return "\n".join(p.get("text") or "" for p in c)  # Sushi joins text parts with "\n" (checked live)
+    return c if isinstance(c, str) else None
+
+
+def _tool_calls(calls):
+    """Assistant tool calls for the template (it iterates `arguments|items`): JSON-string arguments parsed, as Sushi
+    does. None when they are not well-formed."""
+    if not isinstance(calls, list):
+        return None
+    out = []
+    for c in calls:
+        fn = c.get("function") if isinstance(c, dict) else None
+        if not isinstance(fn, dict) or not isinstance(fn.get("name"), str):
+            return None
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args) if args.strip() else {}
+            except ValueError:
+                return None
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            return None
+        out.append({"type": "function", "function": {"name": fn["name"], "arguments": args}})
+    return out
 
 
 def sushi_template_kwargs(body):
@@ -80,31 +135,48 @@ class Renderer:
         self.tok = AutoTokenizer.from_pretrained(model_dir)
 
     def prepare(self, body):
-        if body.get("tools") or body.get("functions"):
+        if body.get("functions"):
             return None
+        tools = body.get("tools")
+        choice = tool_choice_kind(body.get("tool_choice"))
+        if tools is not None and choice in ("required", "named"):
+            return None                         # Sushi appends its own "You MUST call ..." instruction
+        if choice == "none" or tools is None:
+            tools, has_tools = None, False
+        elif not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
+            return None
+        else:
+            has_tools = True
         msgs = []
         for m in body.get("messages") or []:
-            if m.get("role") not in ("system", "user", "assistant") or m.get("tool_calls"):
+            role = m.get("role")
+            if role not in ("system", "user", "assistant", "tool"):
                 return None
             if m.get("reasoning_content") or m.get("reasoning"):
                 return None
-            c = m.get("content")
-            if isinstance(c, list):
-                if any(not isinstance(p, dict) or p.get("type") != "text" for p in c):
-                    return None
-                c = "\n".join(p.get("text") or "" for p in c)  # Sushi joins text parts with "\n" (checked live)
-            if not isinstance(c, str):
+            c = _text(m.get("content"))
+            if c is None:
                 return None
-            msgs.append({"role": m["role"], "content": c})
-        if not msgs or msgs[-1]["role"] != "user":
+            msg = {"role": role, "content": c}
+            if m.get("tool_calls"):
+                if role != "assistant":
+                    return None
+                calls = _tool_calls(m["tool_calls"])
+                if calls is None:
+                    return None
+                msg["tool_calls"] = calls
+            msgs.append(msg)
+        if not msgs or msgs[-1]["role"] not in ("user", "tool"):
             return None
         kw = sushi_template_kwargs(body)
         if kw is None:
             return None
-        text = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, **kw)
+        text = self.tok.apply_chat_template(msgs, tools=tools or None, tokenize=False, add_generation_prompt=True, **kw)
+        ids = self.tok.encode(text, add_special_tokens=False)
         sbody = {k: v for k, v in body.items() if k not in THINKING_FIELDS}
         sbody["chat_template_kwargs"] = dict(kw)
-        return Prepared(self.tok.encode(text, add_special_tokens=False), text, sbody, kw["enable_thinking"])
+        sbody["kvh_prompt_ids"] = ids
+        return Prepared(ids, text, sbody, kw["enable_thinking"], has_tools)
 
     def render_ids(self, body):
         p = self.prepare(body)

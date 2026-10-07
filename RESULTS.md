@@ -69,3 +69,17 @@ Live, 100K needle document (q0, all eight codes), straight to the proxy, fresh p
 | Sushi cold, medium | 153.1 s | 160.8 s | 8/8 | 0 |
 
 Proxy steps were prefill 43.7–44.1 s, save 1.0, stream 3.9–4.0, import 0.0. All three answers are identical; the thinking text differs in length (902 / 1,611 chars for the medium handoff / cold), the same near-tie drift seen in free text before.
+
+## Tool conversations hand off (2026-10-07, late)
+
+Sushi renders tools straight from the request (the OpenAI `{"type": "function", "function": ...}` objects as sent) and parses JSON-string call arguments into mappings; a 10K agent conversation (two tools with nested schemas and non-ASCII descriptions, an assistant tool call, a 40K-character tool result) was token-identical to Sushi's own cache entry with thinking off, medium and kwargs-on, and Sushi flags such entries `has_tools: true`, which is part of its cache key. Strata does not render tools the same way: `serve/frontend.py` unwraps each tool to its function object before the template, so its prompt was 9–10 tokens short on every tools request, and it validates tool names before rendering, so no reshaping of the request gets it to Sushi's text. Local Strata patch `strata-kvh-prompt-ids.patch` (the GPU box branch `kvh-peer-session`, server-side Python only): an optional `kvh_prompt_ids` on `/v1/chat/completions` replaces the template render. The proxy now sends it on every handoff, with the ids that Sushi's `/tokenize` has just confirmed, so Strata's own rendering (tool unwrapping, effort-at-end, literal-tag and empty-turn handling) no longer matters. `render.py` allows tools, tool messages and a trailing tool result; `tool_choice` "none" drops the tools (as Sushi does), "required" or a named function pass through (Sushi adds its own instruction). The proxy's cache lookup only counts entries with the same `has_tools` flag, and the handoff marks the converted entry.
+
+Live, an agent conversation whose `read_file` result is the 100K needle document (system, user request, assistant tool call, tool result; fresh file name each run), then a follow-up question:
+
+| run | turn 1 first token | turn 1 | follow-up |
+|---|---|---|---|
+| handoff, thinking off | 50.6 s | another `read_file` call | 0.7 s, correct |
+| Sushi cold, thinking off | 152.8 s | another `read_file` call | 0.7 s, correct |
+| handoff via `qwen38-flash-bigdoc-think` (medium) | 49.9 s | 8/8 codes | 1.3 s, correct |
+
+With thinking off the model calls `read_file` again in both arms, so that is the model on this conversation, not the handoff. Sushi restored 100,864 of 100,871 and 100,864 of 100,869 tokens after the two handoffs, and both follow-ups were served from the `has_tools` entry. A plain (no tools) 100K handoff through the new ids path: 50.1 s first token, 8/8.

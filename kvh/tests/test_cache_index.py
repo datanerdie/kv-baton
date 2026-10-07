@@ -1,3 +1,6 @@
+import json
+import os
+
 from cache_index import best_restore, common_prefix, find_cache_root, next_entry_id
 from conftest import make_entry
 
@@ -21,6 +24,16 @@ def test_best_restore_never_returns_the_full_prompt(tmp_path):
     make_entry(tmp_path, 1, list(range(40)), [40])       # a checkpoint AT the prompt end cannot be restored
     make_entry(tmp_path, 2, list(range(40)), [33])
     assert best_restore(str(tmp_path), prompt) == 33
+
+
+def test_best_restore_only_counts_entries_with_the_same_tools_flag(tmp_path):
+    prompt = list(range(100))
+    d = make_entry(tmp_path, 1, list(range(100)), [80])
+    make_entry(tmp_path, 2, list(range(100)), [40])
+    meta = json.load(open(os.path.join(d, "meta.json"))); meta["has_tools"] = True
+    json.dump(meta, open(os.path.join(d, "meta.json"), "w"))
+    assert best_restore(str(tmp_path), prompt) == 40
+    assert best_restore(str(tmp_path), prompt, has_tools=True) == 80
 
 
 def test_best_restore_ignores_junk(tmp_path):

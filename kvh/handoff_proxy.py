@@ -275,7 +275,7 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
             try:
                 root = cache_root_fn() if cache_root_fn else cfg.cache_root
                 rcfg = dataclasses.replace(cfg, cache_root=root)
-                restorable = best_restore(root, ids)
+                restorable = best_restore(root, ids, prepared.has_tools)
                 go, why = handoff.decide(len(ids), restorable, rcfg)
             except Exception as e:
                 log(f"bigdoc: cache lookup failed ({type(e).__name__}: {e}) -> pass through")
@@ -292,13 +292,15 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 log(f"bigdoc: not handing off, {reason} -> pass through")
                 return self._relay(raw, streaming, False)
             effort = prepared.strata_body["chat_template_kwargs"]
-            log(f"bigdoc: Sushi tokenizer agrees; thinking {'on, ' + effort['reasoning_effort'] if prepared.thinking else 'off'}")
+            log(f"bigdoc: Sushi tokenizer agrees; thinking {'on, ' + effort['reasoning_effort'] if prepared.thinking else 'off'}"
+                f"{', tools' if prepared.has_tools else ''}")
             headers_sent = False
             state = {"step": "start", "done": False, "err": None, "t": None}
 
             def work():
                 try:
-                    state["t"] = handoff.run(prepared.strata_body, ids, rcfg, steps, gate, lambda s: state.update(step=s))
+                    state["t"] = handoff.run(prepared.strata_body, ids, rcfg, steps, gate, lambda s: state.update(step=s),
+                                             has_tools=prepared.has_tools)
                 except Exception as e:
                     state["err"] = e
                 finally:

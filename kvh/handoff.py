@@ -67,7 +67,7 @@ def decide(n_prompt, restorable, cfg):
     return True, f"{new} new tokens"
 
 
-def run(body, prompt_ids, cfg, steps, gate, progress):
+def run(body, prompt_ids, cfg, steps, gate, progress, has_tools=False):
     tag = uuid.uuid4().hex[:12]
     session, dump_dir = f"kvh-{tag}.bin", os.path.join(cfg.incoming, f"dump-{tag}")
     staged = None
@@ -111,6 +111,8 @@ def run(body, prompt_ids, cfg, steps, gate, progress):
             if list(got) != list(prompt_ids):
                 raise HandoffError("token ids differ between Strata and Sushi's render")
             timed("convert", steps.convert, dump_dir, staged)
+        if has_tools:
+            mark_has_tools(staged)
 
         if steps.import_entry is not None:
             os.rename(staged, final)
@@ -159,6 +161,16 @@ def run(body, prompt_ids, cfg, steps, gate, progress):
         shutil.rmtree(dump_dir, ignore_errors=True)
         if staged is not None:
             shutil.rmtree(staged, ignore_errors=True)
+
+
+def mark_has_tools(entry):
+    """The converter writes has_tools false; Sushi only restores an entry for requests with the same flag."""
+    path = os.path.join(entry, "meta.json")
+    with open(path) as f:
+        meta = json.load(f)
+    meta["has_tools"] = True
+    with open(path, "w") as f:
+        json.dump(meta, f)
 
 
 def _post(url, body, timeout):

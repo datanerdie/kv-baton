@@ -43,7 +43,9 @@ def _tokens(path):
     return a
 
 
-def best_restore(root, prompt_ids):
+def best_restore(root, prompt_ids, has_tools=False):
+    """Highest SSM checkpoint Sushi could restore for this prompt. Like Sushi's DiskTier.bestMatch, only entries with
+    the same has_tools flag count."""
     best = 0
     for name in os.listdir(root):
         if not ENTRY_RE.match(name):
@@ -52,6 +54,8 @@ def best_restore(root, prompt_ids):
         try:
             with open(os.path.join(d, "meta.json")) as f:
                 meta = json.load(f)
+            if bool(meta.get("has_tools", False)) != has_tools:
+                continue
             cps = [int(s["pos"]) for s in meta.get("ssm") or []]
             if not cps or max(cps) <= best:
                 continue
