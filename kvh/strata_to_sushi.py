@@ -18,9 +18,11 @@ Mapping (verified 2026-10-07 against Sushi's own entry for the same 8,262-token 
 Not converted: the MTP head's state (spec.safetensors). It only affects drafting, and Sushi declines a missing spec.
 """
 import json
+import queue
 import struct
 import os
 import sys
+import threading
 
 import mlx.core as mx
 import numpy as np
@@ -143,6 +145,41 @@ def convert(dump, out, state="cp0"):
     w.finish()
 
 
+class Prefetch:
+    """Reads a stream on its own thread into a bounded queue, so the network transfer keeps going while the main
+    thread converts (measured on a 100K session: transfer 1.7 s and conversion 1.8 s ran back to back without it).
+    read(n) returns up to n bytes, b"" at the end; an error on the reading side is raised here."""
+
+    def __init__(self, f, block=16 << 20, depth=32):
+        self.q, self.buf, self.off, self.done = queue.Queue(depth), b"", 0, False
+        threading.Thread(target=self._run, args=(f, block), daemon=True).start()
+
+    def _run(self, f, block):
+        try:
+            while True:
+                b = f.read(block)
+                self.q.put(b)
+                if not b:
+                    return
+        except BaseException as e:               # handed to the consumer, which raises it
+            self.q.put(e)
+
+    def read(self, n):
+        while self.off >= len(self.buf):
+            if self.done:
+                return b""
+            item = self.q.get()
+            if isinstance(item, BaseException):
+                raise item
+            if not item:
+                self.done = True
+                return b""
+            self.buf, self.off = item, 0
+        b = self.buf[self.off:self.off + n]
+        self.off += len(b)
+        return b
+
+
 def convert_stream(f, out, state="cp0"):
     """Straight from a Strata session file (STRSESS v1) read as a stream, e.g. `ssh gpu-box cat FILE | ... -`.
     Layout (Strata src/core/conversation_file.cpp): 64-byte header; geometry (18 i64), layer_lo, layer_hi, cvec;
@@ -150,6 +187,7 @@ def convert_stream(f, out, state="cp0"):
     cells, heads, head_dim, page_size, pooled_rows, idx_dim) and 5 length-prefixed buffers (k, v, k_scale,
     v_scale, pooled) — the 12 attention layers, then the MTP draft layer (skipped); payload hash, b"STRSEND\\x01"."""
     got = [0]
+    f = Prefetch(f)
 
     def read(n):
         parts, left = [], n
