@@ -239,6 +239,9 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 return False, f"/v1/models failed ({type(e).__name__}: {e})"
             if got != (EXPECTED_SUSHI_MODEL, EXPECTED_SUSHI_CTX):
                 return False, f"upstream is {got[0]!r} ctx {got[1]!r}, not {EXPECTED_SUSHI_MODEL!r} ctx {EXPECTED_SUSHI_CTX}"
+            effort = m.get("default_reasoning_effort")
+            if effort not in (None, "off"):    # sushi --think X changes the defaults render.py follows (1.2.0)
+                return False, f"Sushi's default reasoning effort is {effort!r} (--think), which the render does not model"
             return True, ""
 
         def _sushi_tokenizes_alike(self, prepared):

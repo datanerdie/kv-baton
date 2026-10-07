@@ -78,7 +78,6 @@ def on(effort):
     ({"reasoning_effort": "low"}, on("low")),                                           # top level: 53 / 27 / 65
     ({"reasoning_effort": "medium"}, on("medium")),
     ({"reasoning_effort": "xhigh"}, on("xhigh")),
-    ({"reasoning_effort": "minimal"}, on("low")),
     ({"reasoning_effort": "none"}, OFF),
     ({"reasoning_effort": "off"}, OFF),
     ({"reasoning_effort": "none", "chat_template_kwargs": {"enable_thinking": True}}, on("low")),   # the two are OR'd
@@ -93,9 +92,17 @@ def test_sushi_template_kwargs(extra, want):
 
 
 @pytest.mark.parametrize("extra", [{"reasoning_effort": "high"}, {"reasoning_effort": "max"}, {"reasoning": {"effort": "low"}},
+                                   {"reasoning_effort": "minimal"},                    # Sushi 1.2.0: a 400 on qwen4_exp
                                    {"chat_template_kwargs": "enable_thinking"}])
 def test_sushi_template_kwargs_refused_or_unmodelled(extra):
     assert sushi_template_kwargs(body("x", **extra)) is None
+
+
+@pytest.mark.parametrize("extra", [{"response_format": {"type": "json_object"}},
+                                   {"response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object"}}}},
+                                   {"ignore_eos": True}])
+def test_prepare_refuses_requests_sushi_rewrites_or_refuses(r, extra):
+    assert r.prepare(body("hi", **extra)) is None
 
 
 def test_prepare_spells_sushis_settings_out_for_strata(r):

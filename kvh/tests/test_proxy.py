@@ -325,6 +325,8 @@ def _models(model, ctx):
     (_models("Qwen3.8-Flash-Next-Sushi-4bpw", 262144), 200, "ctx 262144"),
     ({"error": "nope"}, 500, "/v1/models failed"),
     ({"data": []}, 200, "/v1/models failed"),
+    ({"data": [{"id": "Qwen3.8-Flash-Next-Sushi-4bpw", "context_length": 1048576, "default_reasoning_effort": "low"}]},
+     200, "default reasoning effort is 'low'"),
 ])
 def test_bigdoc_passes_through_unless_production_sushi(setup, tmp_path, models, status, reason):
     up, start = setup
@@ -335,8 +337,11 @@ def test_bigdoc_passes_through_unless_production_sushi(setup, tmp_path, models, 
     assert reason in (tmp_path / "handoff_proxy-test.log").read_text()
 
 
-def test_bigdoc_hands_off_when_models_match(setup):
+@pytest.mark.parametrize("effort", [None, "off"])
+def test_bigdoc_hands_off_when_models_match(setup, effort):
     up, start = setup
+    if effort:
+        up.models["data"][0]["default_reasoning_effort"] = effort      # what sushi 1.2.0 reports without --think
     log = []; url, _ = start(500, steps(log, 500))
     post(url, BIG)
     assert log == ["prefill", "save", "dump", "convert", "restart"]

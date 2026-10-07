@@ -7,7 +7,7 @@ conversation, 2026-10-07): the request's tools as given, tool-call arguments as 
 them. Strata does not render tools the same way (it unwraps each tool to its function object), so it gets the prompt
 as token ids (`kvh_prompt_ids`, local Strata patch) and renders nothing itself.
 
-Thinking follows Sushi 1.1.1's own rules (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
+Thinking follows Sushi's own rules (1.1.1, unchanged in 1.2.0 while no --think flag is set) (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
 qwen38EffortFor), which differ from the template's defaults: `reasoning_effort` counts only at the top level (inside
 chat_template_kwargs it is ignored), thinking on without an effort word is "low", and a request naming neither is
 thinking off. Strata follows the template, so it gets the resolved settings written out explicitly.
@@ -21,7 +21,8 @@ SUSHI_MODEL_DIR = os.path.expanduser(os.environ.get("KVH_SUSHI_MODEL_DIR", "~/.s
 # The pack's generation_config.json declares no thinking default, and qwen4_exp is not on Sushi's thinking-on
 # allowlist, so a request naming neither enable_thinking nor reasoning_effort runs thinking off (measured 2026-10-07).
 ARCH_DEFAULT_THINKING = False
-# Sushi's effort table for qwen4_exp (model.zig qwen4_exp_efforts); "none" is an alias of off. Other words get a 400.
+# Sushi's effort table for qwen4_exp (model.zig qwen4_exp_efforts); "none" is an alias of off. Other words get a 400
+# (since 1.2.0 also "minimal", which 1.1.1 took as low).
 EFFORT_ARMS = ("off", "low", "medium", "xhigh")
 # Request fields the Strata copy must not carry: Sushi's resolution of them is written into chat_template_kwargs.
 THINKING_FIELDS = ("enable_thinking", "reasoning_effort")
@@ -104,8 +105,6 @@ def sushi_template_kwargs(body):
     word = body.get("reasoning_effort")
     if not isinstance(word, str):
         word, effort_on = None, None
-    elif word == "minimal":
-        effort_on = True
     else:
         arm = "off" if word == "none" else word
         if arm not in EFFORT_ARMS:
@@ -117,7 +116,7 @@ def sushi_template_kwargs(body):
     else:
         enable = bool(et) or bool(effort_on)
 
-    if not enable or word is None or word in ("low", "minimal", "none"):
+    if not enable or word is None or word in ("low", "none"):
         effort = "low"
     elif word == "medium":
         effort = "medium"
@@ -135,8 +134,8 @@ class Renderer:
         self.tok = AutoTokenizer.from_pretrained(model_dir)
 
     def prepare(self, body):
-        if body.get("functions"):
-            return None
+        if body.get("functions") or body.get("response_format") or body.get("ignore_eos"):
+            return None                         # Sushi writes a schema instruction into the prompt / refuses ignore_eos
         tools = body.get("tools")
         choice = tool_choice_kind(body.get("tool_choice"))
         if tools is not None and choice in ("required", "named"):
