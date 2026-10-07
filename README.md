@@ -16,19 +16,19 @@ At 100K tokens the first token arrives in **49 s instead of ~152 s**, with the s
 | [Strata](https://github.com/Niko1221/Strata) v0.1.40.1 (C++/CUDA) | Linux box with 2x RTX 3090 | prefill only, unsloth `UD-IQ4_XS` GGUF, `--kv int8`; 2,283 t/s across both cards |
 | `kvh/handoff_proxy.py` | Mac | OpenAI-compatible proxy in front of Sushi; decides per request whether to hand off |
 | `kvh/strata_to_sushi.py` | Mac | turns a Strata session file into a Sushi prefix-cache entry |
-| LiteLLM gateway (optional) | Mac | exposes a normal alias and an opt-in `qwen38-flash-bigdoc` alias |
+| LiteLLM gateway (optional) | Mac | exposes the model aliases; all of them go through the proxy |
 
 ```
 client --> LiteLLM :4001 --> handoff proxy :8002 --> Sushi :8000 (Mac)   <- every request ends here
                                    |
-                                   | bigdoc alias + >= 30K uncached tokens
+                                   | >= 5,000 uncached tokens (any alias)
                                    v
                      ssh -L 18080 --> Strata :8080 (NVIDIA box)
 ```
 
 ## What happens on a big document
 
-1. The proxy renders the request with the model's chat template and works out how much of it Sushi already has in its disk prefix cache. Thinking and effort are resolved the way Sushi does it, and the rendered text is checked against Sushi's own `/tokenize`. Fewer than 30,000 new tokens, images, a `tool_choice` that forces a call, a render that differs from Sushi's tokens, or the NVIDIA box unreachable: the request goes straight to Sushi unchanged.
+1. The proxy renders the request with the model's chat template and works out how much of it Sushi already has in its disk prefix cache. Thinking and effort are resolved the way Sushi does it, and the rendered text is checked against Sushi's own `/tokenize`. Fewer than 5,000 new tokens, images, a `tool_choice` that forces a call, a render that differs from Sushi's tokens, or the NVIDIA box unreachable: the request goes straight to Sushi unchanged.
 2. Otherwise it sends the request to Strata with `max_tokens: 1` (prefill only) and the checked token ids as `kvh_prompt_ids` (local Strata patch: Strata prefills exactly those tokens instead of rendering the template itself), and asks Strata to save its slot to a session file.
 3. `ssh <gpu-host> cat <session>` is piped straight into `strata_to_sushi.py -`, which parses the session file as it arrives and writes a Sushi cache entry:
    - the 12 attention layers' int8 KV is dequantised and requantised to Sushi's 8-bit affine format (group 64), layer by layer;
@@ -86,7 +86,7 @@ cp kvh/launchd/*.plist ~/Library/LaunchAgents/      # after editing paths and th
 launchctl load ~/Library/LaunchAgents/local.kvh-tunnel.plist ~/Library/LaunchAgents/local.kvh-proxy.plist
 ```
 
-Point clients (or the gateway, see `examples/litellm.yaml`) at `http://127.0.0.1:8002/v1`. Only model names starting with `qwen38-flash-bigdoc` are handoff candidates; everything else is relayed unchanged.
+Point clients (or the gateway, see `examples/litellm.yaml`) at `http://127.0.0.1:8002/v1`. Every chat request is a handoff candidate: with at least 5,000 tokens Sushi has not cached (`KVH_AUTO_MIN_NEW_TOKENS`) it is prefilled on the GPUs, anything smaller is relayed unchanged without further work. Measured break-even is about 3,000 tokens (first token, handoff vs Mac alone: 5K 5.1 vs 7.3 s, 10K 7.3 vs 13.9 s, 20K 11.2 vs 27.7 s). Models named `qwen38-flash-bigdoc*` are always candidates at the same threshold.
 
 **Configuration** (environment of the proxy; defaults in brackets):
 

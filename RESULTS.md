@@ -83,3 +83,34 @@ Live, an agent conversation whose `read_file` result is the 100K needle document
 | handoff via `qwen38-flash-bigdoc-think` (medium) | 49.9 s | 8/8 codes | 1.3 s, correct |
 
 With thinking off the model calls `read_file` again in both arms, so that is the model on this conversation, not the handoff. Sushi restored 100,864 of 100,871 and 100,864 of 100,869 tokens after the two handoffs, and both follow-ups were served from the `has_tools` entry. A plain (no tools) 100K handoff through the new ids path: 50.1 s first token, 8/8.
+
+## Overnight 2026-10-07/08: Sushi 1.2.0, quality runs, automatic handoff
+
+**Sushi 1.2.0** (kvh build, in production since 2026-10-07 22:30). Cache format, lookup and the import path are unchanged; `render.py` follows the changes that matter: "minimal" is now a 400, `response_format` and `ignore_eos` pass through, a missing tool `description`/`parameters` is filled in as Sushi fills it (this one predates 1.2.0: a tool without a description never handed off before), and the proxy refuses to hand off when Sushi reports a default effort other than off. NLL on the quality fixtures is identical to 1.1.1 to the last digit (0.280633139 / 0.121696140).
+
+**club-3090 8-pack** (`quality-test.sh --full`, pass@1 with pass@3 in brackets, 150 cases per arm):
+
+| run | mixed | thinking on | thinking wall |
+|---|---|---|---|
+| Sushi 1.1.1, low effort (2026-10-07 morning) | 128 (133) | 128 (136) | 41 min |
+| Sushi 1.2.0, low | 123 (127) | 130 (134) | 39 min |
+| Sushi 1.2.0, xhigh (model card default) | 125 (126) | stopped: 99/110 on 7 packs vs 102 at low; cli-40 ~250 s per case | — |
+| Sushi 1.2.0, medium | — | **131 (137)**, 0 token-limit or server errors | 40 min |
+| Sushi 1.2.0, low, **every request handed off** | 130 (131) | 128 (136) | 48 min |
+
+Sushi runs thinking at low when a request names no effort, so every earlier Sushi number was low effort. The only mixed-arm move from 1.1.1 to 1.2.0 is cli-40 (greedy, 1,024-token budget, single shot) 32 -> 27; with NLL identical this is near-tie variance in decode. Forced handoff: 752 handoffs, none failed, 665 decoded from Strata's state (the other 87 were short repeats Sushi served from its own cache, which it prefers unless the disk entry is >= 256 tokens longer); scores within noise of Sushi alone, so decoding from a Strata-made state costs nothing measurable across the eight packs.
+
+**When a handoff pays** (first token, through a test proxy that always hands off, vs Sushi alone, thinking off):
+
+| prompt | handoff | Sushi alone |
+|---|---|---|
+| ~5K | 5.1 s | 7.3 s |
+| ~10K | 7.3 s | 13.9 s |
+| ~20K | 11.2 s | 27.7 s |
+| ~32K | 16.0 s | 45.3 s |
+
+A handoff costs ~2.9 s plus Strata's prefill at ~2,300 t/s against Sushi's ~700 t/s: break-even near 3,000 new tokens. **Decode after a handoff** (32K prompt, 600 greedy tokens, four pairs): 53.2 / 57.8 / 57.4 / 52.0 t/s vs cold 58.0 / 57.1 / 57.6 / 55.2, about 3 % slower on average and no slow path of the kind seen elsewhere with mismatched KV dtypes; a likely cause is the MTP head's prompt state, which the converter does not carry over yet (Strata's session has it).
+
+**Automatic handoff (live 2026-10-08 04:09):** the proxy now treats every chat request on the normal aliases as a candidate and hands off at 5,000 new tokens (`KVH_AUTO_MIN_NEW_TOKENS`); smaller requests are relayed with no log line or cache scan, and the one-handoff lock no longer holds other requests. The bigdoc aliases use the same threshold. Before each handoff the proxy now also checks Sushi's version (it must be one the render was checked against) and that Strata serves the expected model and engine, and each converted entry carries `kvh.json` (versions, model, render and converter hashes). Through the gateway: an 8,211-token prompt on `qwen38-flash` 6.0 s to first token, 7,731 tokens on `qwen38-flash-think` (medium) 5.6 s, a short chat 0.3 s; `the KV round-trip and tool-calling check` passed.
+
+**Converter:** reads the session stream on its own thread while converting: 100K transfer + convert 3.3–3.5 s -> 2.3–2.7 s, output byte-identical. Transfers to the GPU box now use a Thunderbolt link when it is up (raw 12.7 vs 9.4 Gb/s on 10GbE; ssh caps both near 1 GB/s).

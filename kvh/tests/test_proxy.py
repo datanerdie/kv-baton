@@ -73,7 +73,7 @@ class FakeRenderer:
         kw = sushi_template_kwargs(body)
         if kw is None:
             return None
-        ids = list(range(self.n))
+        ids = list(range(body.get("_n", self.n)))        # a test can size one request with "_n"
         sbody = {k: v for k, v in body.items() if k not in THINKING_FIELDS}
         sbody["chat_template_kwargs"] = dict(kw)
         sbody["kvh_prompt_ids"] = ids
@@ -453,25 +453,95 @@ def test_capture_ignores_normal_aliases(setup, tmp_path, monkeypatch):
     assert not (cap / "last-bigdoc.json").exists()
 
 
-def test_bigdoc_request_is_normalised_the_same_for_strata_and_sushi(setup):
+def test_requests_reach_sushi_unchanged_and_strata_gets_token_ids(setup):
+    """No rewriting any more (2026-10-08): Sushi joins text parts itself and 1.2.0 tokenises U+202F like the render."""
     up, start = setup
     seen = []
     st = steps([], 500)
     st.strata_prefill = lambda b: (seen.append(b), 500)[1]
     url, _ = start(500, st)
     b = {"model": "qwen38-flash-bigdoc", "messages": [
-        {"role": "user", "content": [{"type": "text", "text": "[file name]: a.txt\n60 °C"}, {"type": "text", "text": "Read and summarise"}]}]}
+        {"role": "user", "content": [{"type": "text", "text": "[file name]: a.txt\n60\u202f°C"}, {"type": "text", "text": "Read"}]}]}
     post(url, b)
-    want = "[file name]: a.txt\n60 °C\nRead and summarise"
-    assert seen and seen[0]["messages"][0]["content"] == want
-    assert up.bodies[-1]["messages"][0]["content"] == want
+    assert seen and seen[0]["kvh_prompt_ids"] == list(range(500))
+    assert up.bodies[-1] == b
 
 
-def test_small_bigdoc_request_reaches_sushi_normalised_too(setup):
+AUTO = {"model": "qwen3.8-flash-next", "messages": [{"role": "user", "content": "x"}]}
+
+
+def test_auto_handoff_on_a_normal_alias_above_its_threshold(setup):
     up, start = setup
-    url, _ = start(50, steps([], 50))
-    post(url, {"model": "qwen38-flash-bigdoc", "messages": [{"role": "user", "content": [{"type": "text", "text": "a b"}]}]})
-    assert up.bodies[-1]["messages"][0]["content"] == "a b"
+    log = []; url, _ = start(500, steps(log, 500), auto_handoff=True, auto_min_new_tokens=300)
+    post(url, AUTO)
+    assert log == ["prefill", "save", "dump", "convert", "restart"]
+
+
+def test_auto_small_requests_pass_without_a_log_line(setup, tmp_path):
+    up, start = setup
+    log = []; url, _ = start(100, steps(log, 100), auto_handoff=True, auto_min_new_tokens=300)
+    post(url, AUTO)
+    text = (tmp_path / "handoff_proxy-test.log").read_text() if (tmp_path / "handoff_proxy-test.log").exists() else ""
+    assert log == [] and len(up.bodies) == 1 and "auto:" not in text
+
+
+def test_without_auto_normal_aliases_are_not_candidates(setup):
+    up, start = setup
+    log = []; url, _ = start(500, steps(log, 500), auto_min_new_tokens=300)
+    post(url, AUTO)
+    assert log == [] and len(up.bodies) == 1
+
+
+def test_small_requests_are_not_held_while_a_handoff_runs(setup):
+    up, start = setup
+    log = []; url, _ = start(500, steps(log, 500, slow=0.4), auto_handoff=True, auto_min_new_tokens=300)
+    t = threading.Thread(target=post, args=(url, BIG)); t.start()
+    time.sleep(0.2)                                      # the handoff is in its first step now
+    t0 = time.time()
+    post(url, {"model": "qwen3.8-flash-next", "messages": [{"role": "user", "content": "hi"}], "_n": 10})
+    took = time.time() - t0
+    t.join()
+    assert took < 0.4 and log[:2] == ["prefill", "save"]
+
+
+@pytest.mark.parametrize("version, status, reason", [
+    ("1.3.0", {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40"}, "Sushi version '1.3.0'"),
+    (None, {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40"}, "Sushi version None"),
+    ("1.2.0", {"model": "qwen3.8-flash-next-other", "engine": "0.1.40"}, "Strata serves"),
+    ("1.2.0", {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.41"}, "Strata serves"),
+])
+def test_identity_mismatch_passes_through(setup, tmp_path, version, status, reason):
+    up, start = setup
+    log = []; url, _ = start(500, steps(log, 500), sushi_version_fn=lambda: version, strata_status_fn=lambda: status)
+    post(url, BIG)
+    assert log == [] and len(up.bodies) == 1
+    assert reason in (tmp_path / "handoff_proxy-test.log").read_text()
+
+
+def test_identity_ok_hands_off_and_stamps_the_entry(setup, tmp_path):
+    up, start = setup
+    status = {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40", "loaded": True}
+    log = []; url, _ = start(500, steps(log, 500), sushi_version_fn=lambda: "1.2.0", strata_status_fn=lambda: status)
+    post(url, BIG)
+    assert log[-1] == "restart"
+    stamps = list((tmp_path / "root").glob("e*/kvh.json"))
+    assert len(stamps) == 1
+    st = json.loads(stamps[0].read_text())
+    assert st["sushi_version"] == "1.2.0" and st["strata"] == {"model": status["model"], "engine": "0.1.40"}
+    assert st["prompt_tokens"] == 500 and st["has_tools"] is False and "converter" in st
+
+
+def test_a_handoff_that_finished_during_the_wait_is_not_repeated(setup, tmp_path, monkeypatch):
+    up, start = setup
+    calls = []
+    def fake_best_restore(root, ids, has_tools=False):
+        calls.append(1)
+        return 0 if len(calls) == 1 else len(ids) - 8     # the second look (after the lock) finds a fresh entry
+    monkeypatch.setattr(handoff_proxy, "best_restore", fake_best_restore)
+    log = []; url, _ = start(500, steps(log, 500))
+    post(url, BIG)
+    assert log == [] and len(up.bodies) == 1
+    assert "no handoff after the wait" in (tmp_path / "handoff_proxy-test.log").read_text()
 
 
 def test_normal_alias_keeps_content_arrays_and_narrow_spaces(setup):

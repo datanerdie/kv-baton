@@ -67,7 +67,7 @@ def decide(n_prompt, restorable, cfg):
     return True, f"{new} new tokens"
 
 
-def run(body, prompt_ids, cfg, steps, gate, progress, has_tools=False):
+def run(body, prompt_ids, cfg, steps, gate, progress, has_tools=False, stamp=None):
     tag = uuid.uuid4().hex[:12]
     session, dump_dir = f"kvh-{tag}.bin", os.path.join(cfg.incoming, f"dump-{tag}")
     staged = None
@@ -113,6 +113,9 @@ def run(body, prompt_ids, cfg, steps, gate, progress, has_tools=False):
             timed("convert", steps.convert, dump_dir, staged)
         if has_tools:
             mark_has_tools(staged)
+        if stamp:
+            with open(os.path.join(staged, "kvh.json"), "w") as f:    # who made this entry, from what (not read by Sushi)
+                json.dump(stamp, f)
 
         if steps.import_entry is not None:
             os.rename(staged, final)

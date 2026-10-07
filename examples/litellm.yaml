@@ -13,7 +13,8 @@ model_list:
         top_k: 20
         min_p: 0
         chat_template_kwargs: {enable_thinking: false}
-  # Any model name starting with qwen38-flash-bigdoc is a handoff candidate, thinking on or off.
+  # Every alias through the proxy hands off at >= 5,000 uncached tokens; the bigdoc aliases are kept for clients
+  # that name them. Thinking on or off.
   # Sushi reads reasoning_effort only at the top level (inside chat_template_kwargs it is ignored and
   # thinking runs at low), so a thinking alias sends it at the top level of extra_body.
   - model_name: qwen38-flash-bigdoc

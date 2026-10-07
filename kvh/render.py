@@ -12,6 +12,7 @@ qwen38EffortFor), which differ from the template's defaults: `reasoning_effort` 
 chat_template_kwargs it is ignored), thinking on without an effort word is "low", and a request naming neither is
 thinking off. Strata follows the template, so it gets the resolved settings written out explicitly.
 """
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -162,6 +163,10 @@ class Renderer:
     def __init__(self, model_dir=SUSHI_MODEL_DIR):
         from transformers import AutoTokenizer
         self.tok = AutoTokenizer.from_pretrained(model_dir)
+        tj = os.path.join(model_dir, "tokenizer.json")
+        h = lambda b: hashlib.sha256(b).hexdigest()[:16]
+        self.identity = {"template": h((self.tok.chat_template or "").encode()),
+                         "tokenizer": h(open(tj, "rb").read()) if os.path.exists(tj) else None}
 
     def prepare(self, body):
         if body.get("functions") or body.get("response_format") or body.get("ignore_eos"):

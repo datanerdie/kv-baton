@@ -188,3 +188,7 @@ def test_a_fill_with_floats_passes_through(r):
     tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {
         "x": {"type": "number", "default": 0.5}}}}}]
     assert r.prepare({"model": "m", "messages": [{"role": "user", "content": "hi"}], "tools": tools}) is None
+
+
+def test_renderer_identity_names_its_template_and_tokenizer(r):
+    assert set(r.identity) == {"template", "tokenizer"} and all(len(v) == 16 for v in r.identity.values())

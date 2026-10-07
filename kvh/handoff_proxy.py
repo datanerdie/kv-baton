@@ -4,6 +4,7 @@ first (handoff.run), then relayed, and Sushi answers from the injected cache ent
 README.md and RESULTS.md at the repository root
 """
 import dataclasses
+import hashlib
 import json
 import os
 import re
@@ -38,6 +39,42 @@ def log(msg):
         f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
 
 
+# Automatic handoff (2026-10-08): chat requests on the normal aliases are candidates too. Threshold measured the same
+# night (first token, handoff vs Sushi alone): 5K 5.1 vs 7.3 s, 10K 7.3 vs 13.9 s, 20K 11.2 vs 27.7 s; a handoff costs
+# ~2.9 s plus Strata's prefill at ~2,300 t/s against Sushi's ~700 t/s, so it breaks even near 3,000 new tokens.
+AUTO_HANDOFF = True
+AUTO_MIN_NEW_TOKENS = int(os.environ.get("KVH_AUTO_MIN_NEW_TOKENS", "5000"))
+# render.py copies Sushi's rendering rules; they were checked token for token on these versions only.
+VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0")
+# The converter assumes this Strata model (UD-IQ4_XS, YaRN 4, int8 KV) and engine (STRSESS v1).
+EXPECTED_STRATA = {"model": os.environ.get("KVH_STRATA_MODEL", "qwen3.8-flash-next-unsloth-ud-iq4_xs"),
+                   "engine": os.environ.get("KVH_STRATA_ENGINE", "0.1.40")}
+SUSHI_VERSION_RE = re.compile(r"^sushi (\d+\.\d+\.\d+)", re.M)
+
+
+def sushi_version(log_path):
+    """The version Sushi printed when it started (`sushi 1.2.0 (MLX ...)` near the top of its log), or None."""
+    try:
+        with open(log_path, errors="replace") as f:
+            m = SUSHI_VERSION_RE.search(f.read(8192))
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
+def strata_status(url=handoff.STRATA_URL):
+    with urllib.request.urlopen(url + "/v1/status", timeout=5) as r:
+        return json.load(r)
+
+
+def file_sha(path):
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
 # Debug capture, off by default: while CAPTURE_DIR/ON exists, each bigdoc request body is saved (mode 0600) as
 # CAPTURE_DIR/last-bigdoc.json, overwriting the previous one. `touch` the flag to switch on, delete it to switch off.
 CAPTURE_DIR = os.path.expanduser("~/.sushi/kvh-capture")
@@ -59,31 +96,6 @@ def capture(raw):
         log(f"capture failed: {e}")
 
 
-def normalise_for_handoff(body):
-    """(body, changed): the version of a bigdoc request that Strata, the render and Sushi all tokenise alike.
-
-    Measured 2026-10-07 on a chat client's request: Sushi's tokenizer splits "°C" after U+202F (narrow no-break space)
-    where the reference tokenizer keeps one token, and that client sends an attached file and the question as separate
-    text parts, which Sushi joins with "\\n". So text-only content arrays become one "\\n"-joined string and U+202F
-    becomes a plain space. Content with any non-text part (an image) is left alone.
-    """
-    msgs = body.get("messages")
-    if not isinstance(msgs, list):
-        return body, False
-    out, changed = [], False
-    for m in msgs:
-        c = m.get("content") if isinstance(m, dict) else None
-        new = c
-        if isinstance(new, list) and new and all(isinstance(p, dict) and p.get("type") == "text" for p in new):
-            new = "\n".join(p.get("text") or "" for p in new)
-        if isinstance(new, str):
-            new = new.replace(" ", " ")
-        if new is not c and new != c:
-            m, changed = dict(m, content=new), True
-        out.append(m)
-    return (dict(body, messages=out), True) if changed else (body, False)
-
-
 def clean_incoming(incoming):
     """Remove `dump-*` and `e<N>` folders left in `incoming` by a crashed handoff; touches nothing else."""
     removed = []
@@ -100,9 +112,13 @@ def clean_incoming(incoming):
 
 
 def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_handoff=THINK_HANDOFF, cache_root_fn=None,
-                force_all=False):
+                force_all=False, auto_handoff=False, auto_min_new_tokens=AUTO_MIN_NEW_TOKENS, sushi_version_fn=None,
+                strata_status_fn=None):
     """renderer None: pass-through only (no handoffs). cache_root_fn: returns the current cache root, per request.
-    force_all (test instances only): every chat completion is a handoff candidate, whatever its model name."""
+    force_all (test instances only): every chat completion is a candidate at cfg.min_new_tokens, whatever its model.
+    auto_handoff: chat completions on other models than qwen38-flash-bigdoc* are candidates at auto_min_new_tokens;
+    below it they are relayed without a log line, a cache lookup or any other work beyond the render.
+    sushi_version_fn / strata_status_fn: identity checks before a handoff (None skips that check, for tests)."""
     gate, one_handoff = Gate(), threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -188,7 +204,7 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 u = json.loads(data).get("usage") or {}
                 got = (u.get("prompt_tokens_details") or {}).get("cached_tokens")
                 if got is not None:
-                    log(f"bigdoc: Sushi restored {got} cached tokens (restore point {expect})"
+                    log(f"handoff: Sushi restored {got} cached tokens (restore point {expect})"
                         + ("" if got >= expect else " -> HANDOFF DID NOT TAKE"))
             except Exception as e:
                 log(f"bigdoc: could not read cached_tokens ({type(e).__name__}: {e})")
@@ -217,19 +233,18 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 return self._relay(raw, False, False)
             streaming = bool(body.get("stream"))
             model = str(body.get("model") or "")
-            if not self.path.endswith("/chat/completions") or not (force_all or model.startswith(BIGDOC_PREFIX)):
+            bigdoc = force_all or model.startswith(BIGDOC_PREFIX)
+            if not self.path.endswith("/chat/completions") or not (bigdoc or auto_handoff):
                 return self._relay(raw, streaming, False)
-            capture(raw)
-            body, changed = normalise_for_handoff(body)
-            if changed:
-                raw = json.dumps(body).encode()
-                log("bigdoc: request normalised (text parts joined with \\n, U+202F -> space)")
+            if bigdoc:
+                capture(raw)
             kwargs = body.get("chat_template_kwargs")
             if kwargs is not None and not isinstance(kwargs, dict):
-                log("bigdoc: chat_template_kwargs is not an object -> pass through")
+                if bigdoc:
+                    log("bigdoc: chat_template_kwargs is not an object -> pass through")
                 return self._relay(raw, streaming, False)
-            with one_handoff:
-                return self._bigdoc(raw, body, streaming)
+            threshold = cfg.min_new_tokens if bigdoc else auto_min_new_tokens
+            return self._bigdoc(raw, body, streaming, threshold, "bigdoc" if bigdoc else "auto")
 
         def _sushi_is_production(self):
             """(ok, reason): the upstream answers /v1/models with the production pack at the production ctx."""
@@ -261,51 +276,88 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 return False, f"Sushi tokenizes {len(got)}, render {len(prepared.ids)}, first difference at {first}"
             return True, ""
 
-        def _bigdoc(self, raw, body, streaming):
+        def _identity(self):
+            """(ok, reason, stamp): Sushi runs a version the render was checked against and Strata serves the model and
+            engine the converter assumes; stamp records them in the converted entry (kvh.json)."""
+            stamp = {}
+            if sushi_version_fn is not None:
+                v = sushi_version_fn()
+                if v not in VALIDATED_SUSHI_VERSIONS:
+                    return False, f"Sushi version {v!r} is not one the render was checked against {VALIDATED_SUSHI_VERSIONS}", None
+                stamp["sushi_version"] = v
+            if strata_status_fn is not None:
+                try:
+                    st = strata_status_fn()
+                except Exception as e:
+                    return False, f"Strata /v1/status failed ({type(e).__name__}: {e})", None
+                got = {"model": st.get("model"), "engine": st.get("engine")}
+                if got != EXPECTED_STRATA:
+                    return False, f"Strata serves {got}, the converter expects {EXPECTED_STRATA}", None
+                stamp["strata"] = got
+            return True, "", stamp
+
+        def _bigdoc(self, raw, body, streaming, threshold, label):
+            quiet = label == "auto"                      # a normal chat: no log line unless it is big enough
             if renderer is None:
-                log("bigdoc: no renderer (pass-through-only mode) -> pass through")
+                if not quiet:
+                    log(f"{label}: no renderer (pass-through-only mode) -> pass through")
                 return self._relay(raw, streaming, False)
             try:
                 prepared = renderer.prepare(body)
             except Exception as e:
-                log(f"bigdoc: render failed ({type(e).__name__}: {e}) -> pass through")
+                if not quiet:
+                    log(f"{label}: render failed ({type(e).__name__}: {e}) -> pass through")
                 return self._relay(raw, streaming, False)
             if prepared is None:
-                log("bigdoc: not a plain-text request Sushi would render as modelled -> pass through")
-                return self._relay(raw, streaming, False)
-            if prepared.thinking and not think_handoff:
-                log("bigdoc: thinking on (THINK_HANDOFF off) -> pass through")
+                if not quiet:
+                    log(f"{label}: not a request Sushi would render as modelled -> pass through")
                 return self._relay(raw, streaming, False)
             ids = prepared.ids
+            if len(ids) < threshold:                     # cannot have threshold new tokens: no cache lookup needed
+                if not quiet:
+                    log(f"{label}: prompt {len(ids)} < {threshold} -> pass through")
+                return self._relay(raw, streaming, False)
+            if prepared.thinking and not think_handoff:
+                log(f"{label}: thinking on (THINK_HANDOFF off) -> pass through")
+                return self._relay(raw, streaming, False)
             try:
                 root = cache_root_fn() if cache_root_fn else cfg.cache_root
-                rcfg = dataclasses.replace(cfg, cache_root=root)
+                rcfg = dataclasses.replace(cfg, cache_root=root, min_new_tokens=threshold)
                 restorable = best_restore(root, ids, prepared.has_tools)
                 go, why = handoff.decide(len(ids), restorable, rcfg)
             except Exception as e:
-                log(f"bigdoc: cache lookup failed ({type(e).__name__}: {e}) -> pass through")
+                log(f"{label}: cache lookup failed ({type(e).__name__}: {e}) -> pass through")
                 return self._relay(raw, streaming, False)
-            log(f"bigdoc: prompt {len(ids)}, restorable {restorable}: {'HANDOFF' if go else 'pass'} ({why})")
+            log(f"{label}: prompt {len(ids)}, restorable {restorable}: {'HANDOFF' if go else 'pass'} ({why})")
             if not go:
                 return self._relay(raw, streaming, False)
             ok, reason = self._sushi_is_production()
+            if ok:
+                ok, reason, stamp = self._identity()
+            if ok:
+                ok, reason = self._sushi_tokenizes_alike(prepared)
             if not ok:
-                log(f"bigdoc: not handing off, {reason} -> pass through")
-                return self._relay(raw, streaming, False)
-            ok, reason = self._sushi_tokenizes_alike(prepared)
-            if not ok:
-                log(f"bigdoc: not handing off, {reason} -> pass through")
+                log(f"{label}: not handing off, {reason} -> pass through")
                 return self._relay(raw, streaming, False)
             effort = prepared.strata_body["chat_template_kwargs"]
-            log(f"bigdoc: Sushi tokenizer agrees; thinking {'on, ' + effort['reasoning_effort'] if prepared.thinking else 'off'}"
+            log(f"{label}: Sushi tokenizer agrees; thinking {'on, ' + effort['reasoning_effort'] if prepared.thinking else 'off'}"
                 f"{', tools' if prepared.has_tools else ''}")
+            stamp.update(created=time.strftime("%Y-%m-%dT%H:%M:%S%z"), prompt_tokens=len(ids), has_tools=prepared.has_tools,
+                         template_kwargs=effort, render=getattr(renderer, "identity", None),
+                         converter=file_sha(os.path.join(os.path.dirname(os.path.abspath(__file__)), "strata_to_sushi.py")))
             headers_sent = False
-            state = {"step": "start", "done": False, "err": None, "t": None}
+            state = {"step": "waiting for another handoff", "done": False, "err": None, "t": None, "skip": None}
 
             def work():
                 try:
-                    state["t"] = handoff.run(prepared.strata_body, ids, rcfg, steps, gate, lambda s: state.update(step=s),
-                                             has_tools=prepared.has_tools)
+                    with one_handoff:                    # one handoff at a time; other requests are never held here
+                        again = best_restore(root, ids, prepared.has_tools)
+                        go2, why2 = handoff.decide(len(ids), again, rcfg)
+                        if not go2:                      # a handoff that finished while we waited covers this prompt
+                            state["skip"] = f"restorable {again} now ({why2})"
+                            return
+                        state["t"] = handoff.run(prepared.strata_body, ids, rcfg, steps, gate,
+                                                 lambda s: state.update(step=s), has_tools=prepared.has_tools, stamp=stamp)
                 except Exception as e:
                     state["err"] = e
                 finally:
@@ -329,7 +381,7 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                         alive = False          # the handoff still runs to the end; only the relay is skipped
             err = state["err"]
             if isinstance(err, handoff.SushiDown):
-                log(f"bigdoc: SUSHI DOWN: {err}")
+                log(f"{label}: SUSHI DOWN: {err}")
                 msg = json.dumps({"error": f"Sushi did not come back after the handoff restart: {err}"}).encode()
                 if headers_sent and alive:
                     self._chunk(b"data: " + msg + b"\n\n"); self._chunk(b"")
@@ -338,9 +390,11 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 return
             expect = None
             if err is not None:
-                log(f"bigdoc: handoff failed, passing through: {err}")
+                log(f"{label}: handoff failed, passing through: {err}")
+            elif state["skip"]:
+                log(f"{label}: no handoff after the wait, {state['skip']} -> pass through")
             else:
-                log(f"bigdoc: handoff done {state['t']}")
+                log(f"{label}: handoff done {state['t']}")
                 expect = len(ids) - 8      # Strata's checkpoint sits ~7 tokens before the prompt end
             if alive:
                 self._relay(raw, streaming, headers_sent, expect_cached=expect)
@@ -369,13 +423,16 @@ def main():
     except Exception as e:
         log(f"Renderer failed ({type(e).__name__}: {e}); running pass-through only, no handoffs")
         renderer = None
-    cfg = handoff.Config(cache_root=root, incoming=incoming)
+    cfg = handoff.Config(cache_root=root, incoming=incoming, min_new_tokens=AUTO_MIN_NEW_TOKENS)   # bigdoc alias: same
     if os.environ.get("KVH_MIN_NEW_TOKENS"):
         cfg = dataclasses.replace(cfg, min_new_tokens=int(os.environ["KVH_MIN_NEW_TOKENS"]))
     srv = make_server(port, handoff.SUSHI_URL, renderer, cfg, handoff.real_steps(),
-                      cache_root_fn=lambda: find_cache_root(sushi_log, default_root), force_all=force_all)
-    log(f"proxy up on 127.0.0.1:{port}, cache root {root}" +
-        (f" - TEST INSTANCE: every chat request is a candidate, min_new_tokens {cfg.min_new_tokens}" if force_all else ""))
+                      cache_root_fn=lambda: find_cache_root(sushi_log, default_root), force_all=force_all,
+                      auto_handoff=AUTO_HANDOFF and not force_all, sushi_version_fn=lambda: sushi_version(sushi_log),
+                      strata_status_fn=strata_status)
+    log(f"proxy up on 127.0.0.1:{port}, cache root {root}, Sushi {sushi_version(sushi_log)}" +
+        (f" - TEST INSTANCE: every chat request is a candidate, min_new_tokens {cfg.min_new_tokens}" if force_all else
+         f", automatic handoff at {AUTO_MIN_NEW_TOKENS} new tokens" if AUTO_HANDOFF else ""))
     srv.serve_forever()
 
 
