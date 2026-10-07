@@ -1,4 +1,6 @@
-# nvidia-prefill-mac-decode
+# kv-baton
+
+NVIDIA GPUs prefill, an Apple Silicon Mac decodes: the prompt's KV state is handed over like a relay baton.
 
 A Mac decodes Qwen3.8-Flash-Next quickly but is slow to read a long new prompt. Two RTX 3090s read it about 3.5x faster. This project lets the GPUs read (prefill) a big document, converts their prompt state into a cache entry for the Mac's inference server, and lets the Mac answer from that entry as if it had read the document itself.
 
