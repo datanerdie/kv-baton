@@ -26,8 +26,8 @@ client --> LiteLLM :4001 --> handoff proxy :8002 --> Sushi :8000 (Mac)   <- ever
 
 ## What happens on a big document
 
-1. The proxy renders the request with the model's chat template and works out how much of it Sushi already has in its disk prefix cache. Fewer than 30,000 new tokens, a thinking request, tools or images, or the NVIDIA box unreachable: the request goes straight to Sushi unchanged.
-2. Otherwise it sends the same request to Strata with `max_tokens: 1` (prefill only) and asks Strata to save its slot to a session file.
+1. The proxy renders the request with the model's chat template and works out how much of it Sushi already has in its disk prefix cache. Thinking and effort are resolved the way Sushi does it, and the rendered text is checked against Sushi's own `/tokenize`. Fewer than 30,000 new tokens, tools or images, a render that differs from Sushi's tokens, or the NVIDIA box unreachable: the request goes straight to Sushi unchanged.
+2. Otherwise it sends the same request to Strata with `max_tokens: 1` (prefill only) and Sushi's thinking settings written into `chat_template_kwargs` and asks Strata to save its slot to a session file.
 3. `ssh <gpu-host> cat <session>` is piped straight into `strata_to_sushi.py -`, which parses the session file as it arrives and writes a Sushi cache entry:
    - the 12 attention layers' int8 KV is dequantised and requantised to Sushi's 8-bit affine format (group 64), layer by layer;
    - the 36 Gated DeltaNet layers' conv and recurrent state is converted, including Strata's different v-head order and `[k, h, v]` layout;
@@ -67,7 +67,7 @@ Current step times: Strata prefill 43.6 s, save 1.0 s, stream + convert 3.5 s, i
 | `kvh/gpu-box/start-strata.sh` | starts Strata on the GPU box with the patched binary |
 | `kvh/launchd/*.plist` | macOS agents for the proxy and the ssh tunnel (replace `/Users/YOU`) |
 | `examples/` | the Strata server config and the LiteLLM aliases |
-| `kvh/tests/` | 86 unit tests |
+| `kvh/tests/` | 114 unit tests |
 
 ## Setting it up
 
@@ -78,7 +78,7 @@ This was built for one specific pair of machines; expect to adapt paths.
 **Mac.** Install Sushi 1.1.1 (`brew install beamivalice/tap/sushi`) with the `Qwen3.8-Flash-Next-Sushi-4bpw` pack, then build the patched server with `kvh/build-sushi-kvh.sh` and run that binary instead of Homebrew's. Stock Sushi also works: the proxy then restarts Sushi to make it load the entry (~10 s more, and other requests wait during the restart). Then:
 
 ```sh
-uv run --with pytest --with transformers --with jinja2 pytest kvh/tests -q      # 86 passed
+uv run --with pytest --with transformers --with jinja2 pytest kvh/tests -q      # 114 passed
 cp kvh/launchd/*.plist ~/Library/LaunchAgents/      # after editing paths and the ssh host
 launchctl load ~/Library/LaunchAgents/local.kvh-tunnel.plist ~/Library/LaunchAgents/local.kvh-proxy.plist
 ```
@@ -103,9 +103,9 @@ The proxy only hands off while the expected model (`Qwen3.8-Flash-Next-Sushi-4bp
 
 ## Limits
 
-- **Thinking requests are never handed off.** Sushi 1.1.1 reads `reasoning_effort` only as a top-level field and ignores it inside `chat_template_kwargs` (thinking then runs at low), so the proxy's render, which follows the chat template, would not match what Sushi caches. Rendering with the effort Sushi actually uses should fix this; it is not done yet.
+- **Thinking follows Sushi 1.1.1's rules, not the template's.** Sushi reads `reasoning_effort` only as a top-level field (inside `chat_template_kwargs` it is ignored), runs thinking-on without an effort word at low, and a request naming neither with thinking off. `kvh/render.py` copies these rules; a newer Sushi may change them, and the `/tokenize` check then makes such requests pass through. Requests with a `reasoning` object, or with earlier assistant turns carrying `reasoning_content`, pass through.
 - **Text only.** Tools, tool messages and images pass through. Sushi's disk cache only matches entries whose `has_tools` flag equals the request's, and the converter always writes `false`, so letting tools through the gate is not enough on its own.
-- **The token check does not cover Sushi.** The proxy compares Strata's tokens with its own render; if that render disagrees with Sushi, the entry is imported but never matched, and Sushi prefills from scratch after the handoff. Keep the gate strict: anything the render cannot reproduce must pass through.
+- **Two token checks.** Before the prefill the rendered text goes to Sushi's `/tokenize` (0.1 s at 100K); after it, Strata's tokens are compared with the render. Neither sees Sushi's chat template itself, so the thinking rules above are what keep the template side in line (12 request shapes checked against live Sushi).
 - **Up to 131,072 tokens**, Strata's context in this config. Longer prompts go to Sushi alone.
 - **Exact token agreement is required.** The proxy normalises the two differences found in practice: content arrays are joined with `"\n"`, as Sushi does, and U+202F is replaced by a space, because Sushi's tokenizer splits "°C" after it differently. Any remaining mismatch is caught and passed through.
 - **One handoff at a time** (the proxy runs them one after another). Strata needs the GPUs to itself, so stop anything else using them before starting it.

@@ -13,6 +13,7 @@ import pytest
 import handoff
 import handoff_proxy
 from gate import Gate
+from render import THINKING_FIELDS, Prepared, sushi_template_kwargs
 
 
 class FakeSushi:
@@ -22,6 +23,7 @@ class FakeSushi:
         self.models = {"data": [{"id": handoff_proxy.EXPECTED_SUSHI_MODEL, "context_length": handoff_proxy.EXPECTED_SUSHI_CTX}]}
         self.models_status = 200                      # GET /v1/models: configurable document and status
         self.reply, self.break_stream = None, False   # reply: raw non-streaming bytes; break_stream: die mid-SSE
+        self.tokenize = None                          # /tokenize: None = echo the render's ids back, else this reply
         outer = self
         class H(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -34,6 +36,13 @@ class FakeSushi:
                 self.wfile.write(b)
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if self.path == "/tokenize":
+                    if outer.tokenize == 404:
+                        self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
+                    toks = outer.tokenize if outer.tokenize is not None else [int(x) for x in body["content"].split()]
+                    b = json.dumps({"tokens": toks}).encode()
+                    self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers()
+                    self.wfile.write(b); return
                 outer.bodies.append(body); time.sleep(outer.delay)
                 if body.get("stream"):
                     self.send_response(200); self.send_header("Content-Type", "text/event-stream")
@@ -58,8 +67,16 @@ class FakeSushi:
 
 
 class FakeRenderer:
+    """n token ids, the real thinking resolution; the text is the ids, so FakeSushi's /tokenize can echo them."""
     def __init__(self, n): self.n = n
-    def render_ids(self, body): return list(range(self.n))
+    def prepare(self, body):
+        kw = sushi_template_kwargs(body)
+        if kw is None:
+            return None
+        ids = list(range(self.n))
+        sbody = {k: v for k, v in body.items() if k not in THINKING_FIELDS}
+        sbody["chat_template_kwargs"] = dict(kw)
+        return Prepared(ids, " ".join(map(str, ids)), sbody, kw["enable_thinking"])
 
 
 def steps(log, n, slow=0.0, fail=None):
@@ -184,17 +201,46 @@ def test_second_bigdoc_waits_for_the_first(setup):
 BIG = {"model": "qwen38-flash-bigdoc", "messages": [{"role": "user", "content": "x"}]}
 
 
-def test_bigdoc_thinking_on_passes_through(setup):
+def test_bigdoc_thinking_on_hands_off(setup):
     up, start = setup
     log = []; url, _ = start(500, steps(log, 500))
+    post(url, dict(BIG, chat_template_kwargs={"enable_thinking": True}))
+    assert log == ["prefill", "save", "dump", "convert", "restart"]
+
+
+def test_bigdoc_thinking_on_passes_through_with_the_kill_switch(setup):
+    up, start = setup
+    log = []; url, _ = start(500, steps(log, 500), think_handoff=False)
     post(url, dict(BIG, chat_template_kwargs={"enable_thinking": True}))
     assert log == [] and len(up.bodies) == 1
 
 
-def test_bigdoc_reasoning_effort_passes_through_even_with_thinking_off(setup):
+def test_bigdoc_kwargs_reasoning_effort_is_ignored_like_sushi(setup):
     up, start = setup
     log = []; url, _ = start(500, steps(log, 500))
     post(url, dict(BIG, chat_template_kwargs={"enable_thinking": False, "reasoning_effort": "high"}))
+    assert log == ["prefill", "save", "dump", "convert", "restart"]
+
+
+def test_strata_gets_sushis_thinking_settings_spelled_out(setup):
+    up, start = setup
+    log, seen = [], {}
+    st = steps(log, 500)
+    st.strata_prefill = lambda b: (seen.update(b), log.append("prefill"), 500)[2]
+    url, _ = start(500, st)
+    b = dict(BIG, reasoning_effort="medium", chat_template_kwargs={"enable_thinking": True, "reasoning_effort": "xhigh"})
+    post(url, b)
+    assert log[0] == "prefill" and "reasoning_effort" not in seen
+    assert seen["chat_template_kwargs"] == {"enable_thinking": True, "reasoning_effort": "medium"}
+    assert up.bodies[-1]["reasoning_effort"] == "medium"          # Sushi still gets the client's request unchanged
+
+
+@pytest.mark.parametrize("reply", [[1, 2, 3], 404])
+def test_sushi_tokenizer_disagreeing_or_failing_passes_through(setup, reply):
+    up, start = setup
+    up.tokenize = reply
+    log = []; url, _ = start(500, steps(log, 500))
+    post(url, BIG)
     assert log == [] and len(up.bodies) == 1
 
 
@@ -215,7 +261,7 @@ def test_bigdoc_non_dict_chat_template_kwargs_passes_through(setup):
 def test_renderer_exception_passes_through(setup, tmp_path):
     up, _ = setup
     class Boom:
-        def render_ids(self, body): raise ValueError("template exploded")
+        def prepare(self, body): raise ValueError("template exploded")
     cfg = handoff.Config(cache_root=str(tmp_path), incoming=str(tmp_path), min_new_tokens=100)
     log = []
     srv = handoff_proxy.make_server(0, up.url, Boom(), cfg, steps(log, 500))

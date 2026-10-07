@@ -53,3 +53,19 @@ Sushi 1.1.1 + `sushi-kvh-import.patch`: the converted entry is moved into the ca
 ## Streamed conversion (2026-10-07)
 
 The handoff pipes `ssh gpu-box cat <session>` straight into `strata_to_sushi.py -`, which parses the session file as it arrives and quantises each KV layer on arrival (no dump on the GPU box, no separate copy). On a real 32K session the streamed and dump-folder paths give byte-identical entries. Live through the gateway, fresh 100K needle document: proxy steps prefill 43.6 s, save 1.0 s, **stream 3.5 s** (was dump+copy 7.2 + convert 6.0), import 0.0 s; first token **49.2 s** (59.1 s before, 72–74 s with the restart, ~152 s Sushi alone), 8/8.
+
+## Thinking requests hand off (2026-10-07, evening)
+
+`render.py` now resolves thinking the way Sushi 1.1.1 does (`resolveEnableThinking`, `parseReasoningEffort`, `qwen38EffortFor`): `reasoning_effort` counts only at the top level (off / low / medium / xhigh / minimal / none; anything else is Sushi's 400, so the request passes through), `enable_thinking` comes from the top level or else `chat_template_kwargs`, thinking on without an effort word is low, and a request naming neither is thinking off. Strata follows the template instead (it honours the kwargs effort and defaults to thinking on at xhigh), so the proxy sends Strata the resolved `chat_template_kwargs` explicitly and drops the top-level fields; Sushi still gets the client's request unchanged. Before any prefill the proxy also sends the rendered text to Sushi's `/tokenize` (0.1 s at 100K) and passes through on any difference: until now nothing compared the render with Sushi itself. Still passed through: tools, images, a `reasoning` object, assistant messages carrying `reasoning_content`, and a trailing assistant message. `THINK_HANDOFF = False` in `handoff_proxy.py` is the kill switch.
+
+Checked against live Sushi before going live: 12 request shapes (silent, kwargs on/off, kwargs effort, top-level low/medium/xhigh/minimal/none, off + kwargs on, top-level `enable_thinking`, `preserve_thinking`; multi-turn with U+202F) — Sushi's chat prompt_tokens equal `/tokenize` of the render in every case.
+
+Live, 100K needle document (q0, all eight codes), straight to the proxy, fresh prefix each run:
+
+| run | first token | total | needles | Sushi restored |
+|---|---|---|---|---|
+| handoff, top-level `reasoning_effort: medium` | 49.7 s | 55.1 s | 8/8 | 100,551 / 100,556 |
+| handoff, kwargs `enable_thinking: true` (Sushi: low) | 50.1 s | 58.0 s | 8/8 | 100,578 / 100,583 |
+| Sushi cold, medium | 153.1 s | 160.8 s | 8/8 | 0 |
+
+Proxy steps were prefill 43.7–44.1 s, save 1.0, stream 3.9–4.0, import 0.0. All three answers are identical; the thinking text differs in length (902 / 1,611 chars for the medium handoff / cold), the same near-tie drift seen in free text before.

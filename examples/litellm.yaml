@@ -13,10 +13,9 @@ model_list:
         top_k: 20
         min_p: 0
         chat_template_kwargs: {enable_thinking: false}
-  # Any model name starting with qwen38-flash-bigdoc is a handoff candidate. Thinking off only:
-  # Sushi reads reasoning_effort only at the top level (it ignores it inside chat_template_kwargs and
-  # thinks at low), which the proxy's render does not follow, so a thinking request is never handed off.
-  # For a thinking alias on Sushi, send reasoning_effort at the top level of extra_body.
+  # Any model name starting with qwen38-flash-bigdoc is a handoff candidate, thinking on or off.
+  # Sushi reads reasoning_effort only at the top level (inside chat_template_kwargs it is ignored and
+  # thinking runs at low), so a thinking alias sends it at the top level of extra_body.
   - model_name: qwen38-flash-bigdoc
     litellm_params:
       model: openai/qwen38-flash-bigdoc
@@ -31,14 +30,34 @@ model_list:
         top_k: 20
         min_p: 0
         chat_template_kwargs: {enable_thinking: false}
+  - model_name: qwen38-flash-bigdoc-think
+    litellm_params:
+      model: openai/qwen38-flash-bigdoc-think
+      api_base: http://localhost:8002/v1
+      api_key: "EMPTY"
+      num_retries: 0
+      timeout: 4200
+      extra_body:
+        reasoning_effort: medium
+        chat_template_kwargs: {enable_thinking: true, reasoning_effort: medium}
   - model_name: qwen38-flash-direct
     litellm_params:
       model: openai/qwen3.8-flash-next
       api_base: http://localhost:8000/v1
       api_key: "EMPTY"
       timeout: 4200
+  - model_name: qwen38-flash-think-direct
+    litellm_params:
+      model: openai/qwen3.8-flash-next
+      api_base: http://localhost:8000/v1
+      api_key: "EMPTY"
+      timeout: 4200
+      extra_body:
+        reasoning_effort: medium
+        chat_template_kwargs: {enable_thinking: true, reasoning_effort: medium}
 
 router_settings:
   fallbacks:
     - qwen38-flash: [qwen38-flash-direct]
     - qwen38-flash-bigdoc: [qwen38-flash-direct]
+    - qwen38-flash-bigdoc-think: [qwen38-flash-think-direct]

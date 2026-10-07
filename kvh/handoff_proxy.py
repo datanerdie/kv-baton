@@ -21,9 +21,9 @@ import handoff  # noqa: E402
 from cache_index import best_restore, find_cache_root  # noqa: E402
 from gate import Gate  # noqa: E402
 
-# False: Sushi ignores reasoning_effort inside chat_template_kwargs (it reads only the top-level field) and renders
-# thinking at low, so the local render would not match Sushi's prompt; thinking requests pass through.
-THINK_HANDOFF = False
+# Thinking requests hand off since render.py follows Sushi's own thinking/effort rules (2026-10-07); False is the
+# kill switch that passes every thinking request through again.
+THINK_HANDOFF = True
 BIGDOC_PREFIX = "qwen38-flash-bigdoc"
 # A handoff restarts Sushi, so it is only done while the production Sushi pack is what is running (never on another
 # engine, never to start a server the user stopped on purpose).
@@ -226,16 +226,6 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
             if kwargs is not None and not isinstance(kwargs, dict):
                 log("bigdoc: chat_template_kwargs is not an object -> pass through")
                 return self._relay(raw, streaming, False)
-            kwargs = kwargs or {}
-            if "reasoning_effort" in body or "reasoning" in body:
-                log("bigdoc: top-level reasoning_effort/reasoning set (the render does not follow Sushi's effort handling) -> pass through")
-                return self._relay(raw, streaming, False)
-            if "reasoning_effort" in kwargs:
-                log("bigdoc: reasoning_effort set (the render does not follow Sushi's effort handling) -> pass through")
-                return self._relay(raw, streaming, False)
-            if kwargs.get("enable_thinking") and not think_handoff:
-                log("bigdoc: thinking on (THINK_HANDOFF off) -> pass through")
-                return self._relay(raw, streaming, False)
             with one_handoff:
                 return self._bigdoc(raw, body, streaming)
 
@@ -251,18 +241,37 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 return False, f"upstream is {got[0]!r} ctx {got[1]!r}, not {EXPECTED_SUSHI_MODEL!r} ctx {EXPECTED_SUSHI_CTX}"
             return True, ""
 
+        def _sushi_tokenizes_alike(self, prepared):
+            """(ok, reason): Sushi's own tokenizer gives the render's ids for the rendered text. The Strata check after the
+            prefill compares Strata with the render only; this is the one check against Sushi, made before any work."""
+            try:
+                req = urllib.request.Request(upstream + "/tokenize", data=json.dumps({"content": prepared.text}).encode(),
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    got = json.load(r)["tokens"]
+            except Exception as e:
+                return False, f"/tokenize failed ({type(e).__name__}: {e})"
+            if got != prepared.ids:
+                first = next((i for i, (a, b) in enumerate(zip(got, prepared.ids)) if a != b), min(len(got), len(prepared.ids)))
+                return False, f"Sushi tokenizes {len(got)}, render {len(prepared.ids)}, first difference at {first}"
+            return True, ""
+
         def _bigdoc(self, raw, body, streaming):
             if renderer is None:
                 log("bigdoc: no renderer (pass-through-only mode) -> pass through")
                 return self._relay(raw, streaming, False)
             try:
-                ids = renderer.render_ids(body)
+                prepared = renderer.prepare(body)
             except Exception as e:
                 log(f"bigdoc: render failed ({type(e).__name__}: {e}) -> pass through")
                 return self._relay(raw, streaming, False)
-            if ids is None:
-                log("bigdoc: not a plain-text request -> pass through")
+            if prepared is None:
+                log("bigdoc: not a plain-text request Sushi would render as modelled -> pass through")
                 return self._relay(raw, streaming, False)
+            if prepared.thinking and not think_handoff:
+                log("bigdoc: thinking on (THINK_HANDOFF off) -> pass through")
+                return self._relay(raw, streaming, False)
+            ids = prepared.ids
             try:
                 root = cache_root_fn() if cache_root_fn else cfg.cache_root
                 rcfg = dataclasses.replace(cfg, cache_root=root)
@@ -278,12 +287,18 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
             if not ok:
                 log(f"bigdoc: not handing off, {reason} -> pass through")
                 return self._relay(raw, streaming, False)
+            ok, reason = self._sushi_tokenizes_alike(prepared)
+            if not ok:
+                log(f"bigdoc: not handing off, {reason} -> pass through")
+                return self._relay(raw, streaming, False)
+            effort = prepared.strata_body["chat_template_kwargs"]
+            log(f"bigdoc: Sushi tokenizer agrees; thinking {'on, ' + effort['reasoning_effort'] if prepared.thinking else 'off'}")
             headers_sent = False
             state = {"step": "start", "done": False, "err": None, "t": None}
 
             def work():
                 try:
-                    state["t"] = handoff.run(body, ids, rcfg, steps, gate, lambda s: state.update(step=s))
+                    state["t"] = handoff.run(prepared.strata_body, ids, rcfg, steps, gate, lambda s: state.update(step=s))
                 except Exception as e:
                     state["err"] = e
                 finally:
