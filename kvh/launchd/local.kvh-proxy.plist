@@ -10,7 +10,7 @@
         <string>--with</string><string>transformers</string>
         <string>--with</string><string>jinja2</string>
         <string>python</string>
-        <string>/Users/YOU/bigdoc-handoff/kvh/handoff_proxy.py</string>
+        <string>/Users/YOU/nvidia-prefill-mac-decode/kvh/handoff_proxy.py</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict><key>PATH</key><string>/Users/YOU/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>

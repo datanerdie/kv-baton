@@ -19,7 +19,7 @@ index 740c0b6..6102e7a 100644
  const log = @import("log.zig");
  
 +// KVH (local patch, not upstream): an entry id written into the SSD tier by another program
-+// (the bigdoc-handoff proxy) while the server runs. HTTP threads only store the id here; the
++// (the handoff proxy) while the server runs. HTTP threads only store the id here; the
 +// inference thread, which owns the prefix cache, imports it at its next lookup (drainImport).
 +// One slot: handoffs are serialised by the proxy. 0 = empty.
 +pub var kvh_pending_import = std.atomic.Value(u64).init(0);
