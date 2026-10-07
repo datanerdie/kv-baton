@@ -103,8 +103,9 @@ The proxy only hands off while the expected model (`Qwen3.8-Flash-Next-Sushi-4bp
 
 ## Limits
 
-- **Thinking requests are never handed off.** Sushi prepends its own reasoning-effort system message to them, so the proxy's render would not match what Sushi caches.
-- **Text only.** Tools, tool messages and images pass through.
+- **Thinking requests are never handed off.** Sushi 1.1.1 reads `reasoning_effort` only as a top-level field and ignores it inside `chat_template_kwargs` (thinking then runs at low), so the proxy's render, which follows the chat template, would not match what Sushi caches. Rendering with the effort Sushi actually uses should fix this; it is not done yet.
+- **Text only.** Tools, tool messages and images pass through. Sushi's disk cache only matches entries whose `has_tools` flag equals the request's, and the converter always writes `false`, so letting tools through the gate is not enough on its own.
+- **The token check does not cover Sushi.** The proxy compares Strata's tokens with its own render; if that render disagrees with Sushi, the entry is imported but never matched, and Sushi prefills from scratch after the handoff. Keep the gate strict: anything the render cannot reproduce must pass through.
 - **Up to 131,072 tokens**, Strata's context in this config. Longer prompts go to Sushi alone.
 - **Exact token agreement is required.** The proxy normalises the two differences found in practice: content arrays are joined with `"\n"`, as Sushi does, and U+202F is replaced by a space, because Sushi's tokenizer splits "°C" after it differently. Any remaining mismatch is caught and passed through.
 - **One handoff at a time** (the proxy runs them one after another). Strata needs the GPUs to itself, so stop anything else using them before starting it.

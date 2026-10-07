@@ -14,8 +14,9 @@ model_list:
         min_p: 0
         chat_template_kwargs: {enable_thinking: false}
   # Any model name starting with qwen38-flash-bigdoc is a handoff candidate. Thinking off only:
-  # Sushi adds its own reasoning-effort system message to thinking requests, which the proxy's
-  # render cannot reproduce, so a thinking request is never handed off.
+  # Sushi reads reasoning_effort only at the top level (it ignores it inside chat_template_kwargs and
+  # thinks at low), which the proxy's render does not follow, so a thinking request is never handed off.
+  # For a thinking alias on Sushi, send reasoning_effort at the top level of extra_body.
   - model_name: qwen38-flash-bigdoc
     litellm_params:
       model: openai/qwen38-flash-bigdoc

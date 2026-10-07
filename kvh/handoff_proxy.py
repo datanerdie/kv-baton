@@ -21,8 +21,8 @@ import handoff  # noqa: E402
 from cache_index import best_restore, find_cache_root  # noqa: E402
 from gate import Gate  # noqa: E402
 
-# False: Sushi puts a server-side reasoning-effort system message in front of a thinking request that the local
-# render cannot reproduce, so the restore point would not match; thinking requests pass through.
+# False: Sushi ignores reasoning_effort inside chat_template_kwargs (it reads only the top-level field) and renders
+# thinking at low, so the local render would not match Sushi's prompt; thinking requests pass through.
 THINK_HANDOFF = False
 BIGDOC_PREFIX = "qwen38-flash-bigdoc"
 # A handoff restarts Sushi, so it is only done while the production Sushi pack is what is running (never on another
@@ -228,10 +228,10 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 return self._relay(raw, streaming, False)
             kwargs = kwargs or {}
             if "reasoning_effort" in body or "reasoning" in body:
-                log("bigdoc: top-level reasoning_effort/reasoning set (Sushi injects a system message the render cannot match) -> pass through")
+                log("bigdoc: top-level reasoning_effort/reasoning set (the render does not follow Sushi's effort handling) -> pass through")
                 return self._relay(raw, streaming, False)
             if "reasoning_effort" in kwargs:
-                log("bigdoc: reasoning_effort set (Sushi injects a system message the render cannot match) -> pass through")
+                log("bigdoc: reasoning_effort set (the render does not follow Sushi's effort handling) -> pass through")
                 return self._relay(raw, streaming, False)
             if kwargs.get("enable_thinking") and not think_handoff:
                 log("bigdoc: thinking on (THINK_HANDOFF off) -> pass through")
