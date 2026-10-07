@@ -1,0 +1,11 @@
+cold   q0 listed 8/8 (missing []) | q1-q8 exact 8/8 (wrong [])
+s      q0 listed 8/8 (missing []) | q1-q8 exact 8/8 (wrong [])
+  q0: identical first 126/126 tokens, mean KL5 0.00011, same text True
+  q1: identical first 10/10 tokens, mean KL5 0.00009, same text True
+  q2: identical first 10/10 tokens, mean KL5 0.00040, same text True
+  q3: identical first 10/10 tokens, mean KL5 0.00077, same text True
+  q4: identical first 10/10 tokens, mean KL5 0.00012, same text True
+  q5: identical first 10/10 tokens, mean KL5 0.00005, same text True
+  q6: identical first 10/10 tokens, mean KL5 0.00010, same text True
+  q7: identical first 10/10 tokens, mean KL5 0.00013, same text True
+  q8: identical first 10/10 tokens, mean KL5 0.00081, same text True

@@ -1,0 +1,43 @@
+# LiteLLM gateway excerpt: the normal alias and the opt-in big-document alias both go through the
+# handoff proxy (:8002); if the proxy is down, the fallbacks send them to Sushi (:8000) directly.
+model_list:
+  - model_name: qwen38-flash
+    litellm_params:
+      model: openai/qwen3.8-flash-next
+      api_base: http://localhost:8002/v1
+      api_key: "EMPTY"
+      timeout: 4200
+      temperature: 0.7
+      top_p: 0.8
+      extra_body:
+        top_k: 20
+        min_p: 0
+        chat_template_kwargs: {enable_thinking: false}
+  # Any model name starting with qwen38-flash-bigdoc is a handoff candidate. Thinking off only:
+  # Sushi adds its own reasoning-effort system message to thinking requests, which the proxy's
+  # render cannot reproduce, so a thinking request is never handed off.
+  - model_name: qwen38-flash-bigdoc
+    litellm_params:
+      model: openai/qwen38-flash-bigdoc
+      api_base: http://localhost:8002/v1
+      api_key: "EMPTY"
+      # No retries: a retry resends the whole document and can start a second handoff.
+      num_retries: 0
+      timeout: 4200
+      temperature: 0.7
+      top_p: 0.8
+      extra_body:
+        top_k: 20
+        min_p: 0
+        chat_template_kwargs: {enable_thinking: false}
+  - model_name: qwen38-flash-direct
+    litellm_params:
+      model: openai/qwen3.8-flash-next
+      api_base: http://localhost:8000/v1
+      api_key: "EMPTY"
+      timeout: 4200
+
+router_settings:
+  fallbacks:
+    - qwen38-flash: [qwen38-flash-direct]
+    - qwen38-flash-bigdoc: [qwen38-flash-direct]

@@ -1,0 +1,28 @@
+From 3a8afed4876116dcf446274eebd0675d1f0748b0 Mon Sep 17 00:00:00 2001
+From: kvh <kvh@localhost>
+Date: Wed, 7 Oct 2026 14:10:09 +0800
+Subject: [PATCH] KVH experiment: allow session files with --peer-device under
+ STRATA_ALLOW_PEER_SESSION=1
+
+---
+ src/program/generate.cpp | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index 3b551f3..8372aba 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -7843,7 +7843,9 @@ int main(int argc, char** argv) {
+                 strata::core::progress_at(save ? "saving a session" : "restoring a session");
+                 if (path.empty()) { refuse("missing path"); continue; }
+                 if (!stages.empty() || multi_gpu) { refuse("session files do not support --layer-split"); continue; }
+-                if (o.peer_device >= 1) { refuse("session files do not support --peer-device"); continue; }
++                // KVH EXPERIMENT (local patch, not upstream): the peer tier only caches experts on the second card; the
++                // session state stays on CUDA0, so STRATA_ALLOW_PEER_SESSION=1 lets a session file be written with it
++                if (o.peer_device >= 1 && !std::getenv("STRATA_ALLOW_PEER_SESSION")) { refuse("session files do not support --peer-device"); continue; }
+                 if (o.batch > 0) { refuse("session files do not support --batch (parallel requests)"); continue; }
+                 if (o.prompt_cache <= 0) { refuse("session files need --prompt-cache > 0"); continue; }
+                 if (!ver.wait_commit(err)) {
+-- 
+2.43.0
+

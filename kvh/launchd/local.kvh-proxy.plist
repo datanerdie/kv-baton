@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>local.kvh-proxy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOU/.local/bin/uv</string>
+        <string>run</string><string>-q</string>
+        <string>--with</string><string>transformers</string>
+        <string>--with</string><string>jinja2</string>
+        <string>python</string>
+        <string>/Users/YOU/bigdoc-handoff/kvh/handoff_proxy.py</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict><key>PATH</key><string>/Users/YOU/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>ProcessType</key><string>Interactive</string>
+    <key>StandardOutPath</key><string>/Users/YOU/Library/Logs/kvh-proxy.log</string>
+    <key>StandardErrorPath</key><string>/Users/YOU/Library/Logs/kvh-proxy.log</string>
+</dict>
+</plist>

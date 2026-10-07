@@ -1,0 +1,143 @@
+From 8ba6951c75076c3d7ce649d585cdd5d32d3d98d7 Mon Sep 17 00:00:00 2001
+From: kvh <kvh@localhost>
+Date: Wed, 7 Oct 2026 17:05:32 +0800
+Subject: [PATCH] KVH (local patch): POST /v1/kvh/import indexes an SSD-tier
+ entry written while the server runs
+
+---
+ src/kv_disk_cache.zig | 41 +++++++++++++++++++++++++++++++++++++++++
+ src/prefix_cache.zig  |  3 +++
+ src/server.zig        | 23 +++++++++++++++++++++++
+ 3 files changed, 67 insertions(+)
+
+diff --git a/src/kv_disk_cache.zig b/src/kv_disk_cache.zig
+index 740c0b6..6102e7a 100644
+--- a/src/kv_disk_cache.zig
++++ b/src/kv_disk_cache.zig
+@@ -61,6 +61,16 @@ const io_util = @import("io_util.zig");
+ const disk_writer = @import("kv_disk_writer.zig");
+ const log = @import("log.zig");
+ 
++// KVH (local patch, not upstream): an entry id written into the SSD tier by another program
++// (the bigdoc-handoff proxy) while the server runs. HTTP threads only store the id here; the
++// inference thread, which owns the prefix cache, imports it at its next lookup (drainImport).
++// One slot: handoffs are serialised by the proxy. 0 = empty.
++pub var kvh_pending_import = std.atomic.Value(u64).init(0);
++
++pub fn kvhQueueImport(id: u64) void {
++    kvh_pending_import.store(id, .release);
++}
++
+ const KVCache = transformer_mod.KVCache;
+ 
+ /// Restoring from disk only happens when it beats the best RAM match by at
+@@ -3184,6 +3194,37 @@ pub const DiskTier = struct {
+         }
+     }
+ 
++    /// KVH (local patch): import a queued entry id, if any (inference thread only).
++    pub fn drainImport(self: *DiskTier) void {
++        const id = kvh_pending_import.swap(0, .acq_rel);
++        if (id == 0) return;
++        const added = self.importEntry(id) catch |err| {
++            log.info("  [disk-cache] kvh import e{d} failed: {s}\n", .{ id, @errorName(err) });
++            return;
++        };
++        if (added) log.info("  [disk-cache] kvh import e{d}: indexed ({d} entries)\n", .{ id, self.entries.items.len });
++    }
++
++    /// KVH (local patch): index one entry another program wrote into `root` while the server
++    /// runs, exactly as `scan` indexes each entry at startup. False if it is already indexed.
++    pub fn importEntry(self: *DiskTier, id: u64) !bool {
++        for (self.entries.items) |e| if (e.id == id) return false;
++        const loaded = self.loadEntry(id) orelse return error.DiskCacheImportInvalid;
++        // only a real entry moves next_id past it (a bogus id must not inflate future ids)
++        if (id >= self.next_id) self.next_id = id + 1;
++        var e = loaded.e;
++        e.last_used = self.bump();
++        var seen = std.AutoHashMap(u64, void).init(self.allocator);
++        defer seen.deinit();
++        self.billChunksOnce(&e, &seen);
++        self.entries.append(self.allocator, e) catch |err| {
++            self.freeIndexEntryOwned(&e);
++            return err;
++        };
++        self.total_bytes += e.bytes;
++        return true;
++    }
++
+     /// Re-bill a scanned entry's chunk files against the inodes already counted this scan: the
+     /// first entry to see an inode pays for it.
+     fn billChunksOnce(self: *DiskTier, e: *IndexEntry, seen: *std.AutoHashMap(u64, void)) void {
+diff --git a/src/prefix_cache.zig b/src/prefix_cache.zig
+index a22234c..251e5b5 100644
+--- a/src/prefix_cache.zig
++++ b/src/prefix_cache.zig
+@@ -20,6 +20,7 @@ const transformer_mod = @import("transformer.zig");
+ const model_mod = @import("model.zig");
+ const kv_quant = @import("kv_quant.zig");
+ const kv_disk_cache = @import("kv_disk_cache.zig");
++pub const kvhQueueImport = kv_disk_cache.kvhQueueImport; // KVH (local patch)
+ const io_util = @import("io_util.zig");
+ const log = @import("log.zig");
+ const restore_dump = @import("restore_dump.zig");
+@@ -1205,6 +1206,8 @@ pub const HotPrefixCache = struct {
+     ) !LookupResult {
+         self.last_restored_used = null;
+         self.last_restored_disk_id = null;
++        // KVH (local patch): index an entry queued by POST /v1/kvh/import before matching.
++        if (self.disk) |*d| d.drainImport();
+         if (skip) {
+             try target_cache.truncate(0, s);
+             if (target_ssm_entries) |entries| resetSsmEntries(entries);
+diff --git a/src/server.zig b/src/server.zig
+index ef50c24..c695429 100644
+--- a/src/server.zig
++++ b/src/server.zig
+@@ -833,6 +833,7 @@ const ROUTE_PATHS = [_][]const u8{
+     "/v1/chat/completions",
+     "/v1/completions",
+     "/v1/embeddings",
++    "/v1/kvh/import", // KVH (local patch)
+     "/v1/load-model",
+     "/v1/messages",
+     "/v1/models",
+@@ -2524,6 +2525,11 @@ fn handleConnection(
+         const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
+         const body = request[header_end + 4 .. total_read];
+         try handleResponses(allocator, stream, body, lm);
++    } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/v1/kvh/import")) {
++        // KVH (local patch): queue an SSD-tier entry id for import at the next prefix lookup.
++        const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
++        const body = request[header_end + 4 .. total_read];
++        try handleKvhImport(allocator, stream, body);
+     } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/tokenize")) {
+         const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
+         const body = request[header_end + 4 .. total_read];
+@@ -7875,6 +7881,23 @@ fn truncateEmbeddingDims(embedding: []f32, dims: usize) []f32 {
+     return out;
+ }
+ 
++fn handleKvhImport(allocator: std.mem.Allocator, stream: *Conn, body: []const u8) !void {
++    const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch {
++        try sendErrorResponse(allocator, stream, "400 Bad Request", "invalid_request_error", "Invalid JSON", 400);
++        return;
++    };
++    defer parsed.deinit();
++    const id_v = if (parsed.value == .object) parsed.value.object.get("id") else null;
++    if (id_v == null or id_v.? != .integer or id_v.?.integer <= 0) {
++        try sendErrorResponse(allocator, stream, "400 Bad Request", "invalid_request_error", "'id' (a positive integer) is required", 400);
++        return;
++    }
++    prefix_cache_mod.kvhQueueImport(@intCast(id_v.?.integer));
++    var buf: [64]u8 = undefined;
++    const out = std.fmt.bufPrint(&buf, "{{\"queued\":{d}}}", .{id_v.?.integer}) catch "{}";
++    try sendResponse(stream, "200 OK", "application/json", out);
++}
++
+ fn handleTokenize(
+     allocator: std.mem.Allocator,
+     stream: *Conn,
+-- 
+2.56.0
+
