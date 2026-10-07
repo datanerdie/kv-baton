@@ -51,6 +51,36 @@ def tool_choice_kind(value):
     return "auto"
 
 
+def _has_float(v):
+    if isinstance(v, float):
+        return True
+    if isinstance(v, dict):
+        return any(_has_float(x) for x in v.values())
+    if isinstance(v, list):
+        return any(_has_float(x) for x in v)
+    return False
+
+
+def sushi_tools(tools):
+    """The tool list as Sushi hands it to the template (chat.zig fillOptionalToolDefKeys, 1.1.1 and 1.2.0): a function
+    without "description" gets "" and one without "parameters" gets an empty object schema, appended after its own
+    keys. None when Sushi would re-serialise numbers we cannot promise to reproduce (a fill plus a float)."""
+    out, changed = [], False
+    for t in tools:
+        fn = t.get("function")
+        if isinstance(fn, dict) and ("description" not in fn or "parameters" not in fn):
+            fn = dict(fn)
+            if "description" not in fn:
+                fn["description"] = ""
+            if "parameters" not in fn:
+                fn["parameters"] = {"type": "object", "properties": {}}
+            t, changed = dict(t, function=fn), True
+        out.append(t)
+    if changed and _has_float(tools):
+        return None
+    return out
+
+
 def _text(c):
     """A message's content as Sushi joins it, or None when it is not plain text."""
     if c is None:
@@ -146,6 +176,9 @@ class Renderer:
             return None
         else:
             has_tools = True
+            tools = sushi_tools(tools)
+            if tools is None:
+                return None
         msgs = []
         for m in body.get("messages") or []:
             role = m.get("role")

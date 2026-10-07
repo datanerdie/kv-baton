@@ -29,7 +29,7 @@ BIGDOC_PREFIX = "qwen38-flash-bigdoc"
 # engine, never to start a server the user stopped on purpose).
 EXPECTED_SUSHI_MODEL = "Qwen3.8-Flash-Next-Sushi-4bpw"
 EXPECTED_SUSHI_CTX = 1048576
-LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "handoff_proxy.log")
+LOG = os.path.expanduser(os.environ.get("KVH_PROXY_LOG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "handoff_proxy.log"))
 _log_lock = threading.Lock()
 
 
@@ -99,8 +99,10 @@ def clean_incoming(incoming):
     return removed
 
 
-def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_handoff=THINK_HANDOFF, cache_root_fn=None):
-    """renderer None: pass-through only (no handoffs). cache_root_fn: returns the current cache root, per request."""
+def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_handoff=THINK_HANDOFF, cache_root_fn=None,
+                force_all=False):
+    """renderer None: pass-through only (no handoffs). cache_root_fn: returns the current cache root, per request.
+    force_all (test instances only): every chat completion is a handoff candidate, whatever its model name."""
     gate, one_handoff = Gate(), threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -215,7 +217,7 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 return self._relay(raw, False, False)
             streaming = bool(body.get("stream"))
             model = str(body.get("model") or "")
-            if not self.path.endswith("/chat/completions") or not model.startswith(BIGDOC_PREFIX):
+            if not self.path.endswith("/chat/completions") or not (force_all or model.startswith(BIGDOC_PREFIX)):
                 return self._relay(raw, streaming, False)
             capture(raw)
             body, changed = normalise_for_handoff(body)
@@ -353,7 +355,10 @@ def main():
         "KVH_SUSHI_LOG", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sushi-server.log")))
     port = int(os.environ.get("KVH_PROXY_PORT", "8002"))
     root = find_cache_root(sushi_log, default_root)
-    incoming = os.path.expanduser("~/.sushi/kvh-incoming")
+    # A test instance (KVH_FORCE_ALL=1) needs its own port, log and incoming folder (same disk as the cache root: the
+    # entry is renamed into it), so it never cleans or races the production proxy's.
+    incoming = os.path.expanduser(os.environ.get("KVH_INCOMING", "~/.sushi/kvh-incoming"))
+    force_all = os.environ.get("KVH_FORCE_ALL") == "1"
     os.makedirs(incoming, exist_ok=True)
     removed = clean_incoming(incoming)
     if removed:
@@ -365,9 +370,12 @@ def main():
         log(f"Renderer failed ({type(e).__name__}: {e}); running pass-through only, no handoffs")
         renderer = None
     cfg = handoff.Config(cache_root=root, incoming=incoming)
+    if os.environ.get("KVH_MIN_NEW_TOKENS"):
+        cfg = dataclasses.replace(cfg, min_new_tokens=int(os.environ["KVH_MIN_NEW_TOKENS"]))
     srv = make_server(port, handoff.SUSHI_URL, renderer, cfg, handoff.real_steps(),
-                      cache_root_fn=lambda: find_cache_root(sushi_log, default_root))
-    log(f"proxy up on 127.0.0.1:{port}, cache root {root}")
+                      cache_root_fn=lambda: find_cache_root(sushi_log, default_root), force_all=force_all)
+    log(f"proxy up on 127.0.0.1:{port}, cache root {root}" +
+        (f" - TEST INSTANCE: every chat request is a candidate, min_new_tokens {cfg.min_new_tokens}" if force_all else ""))
     srv.serve_forever()
 
 

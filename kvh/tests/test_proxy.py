@@ -202,6 +202,20 @@ def test_second_bigdoc_waits_for_the_first(setup):
 BIG = {"model": "qwen38-flash-bigdoc", "messages": [{"role": "user", "content": "x"}]}
 
 
+def test_force_all_makes_any_model_a_candidate(setup):
+    up, start = setup
+    log = []; url, _ = start(500, steps(log, 500), force_all=True)
+    post(url, {"model": "Qwen3.8-Flash-Next-Sushi-4bpw", "messages": [{"role": "user", "content": "x"}]})
+    assert log == ["prefill", "save", "dump", "convert", "restart"]
+
+
+def test_without_force_all_other_models_pass_through(setup):
+    up, start = setup
+    log = []; url, _ = start(500, steps(log, 500))
+    post(url, {"model": "Qwen3.8-Flash-Next-Sushi-4bpw", "messages": [{"role": "user", "content": "x"}]})
+    assert log == [] and len(up.bodies) == 1
+
+
 def test_bigdoc_thinking_on_hands_off(setup):
     up, start = setup
     log = []; url, _ = start(500, steps(log, 500))

@@ -169,3 +169,22 @@ def test_tool_choice_none_drops_the_tools_like_sushi(r):
 def test_plain_requests_also_send_ids_to_strata(r):
     p = r.prepare(body("hi"))
     assert not p.has_tools and p.strata_body["kvh_prompt_ids"] == p.ids
+
+
+def test_tools_missing_optional_keys_are_filled_like_sushi(r):
+    """Sushi appends "description": "" and an empty parameters schema to a function lacking them (measured on 1.2.0:
+    271 / 259 tokens where the request as given renders 266 / 245)."""
+    P = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    msgs = [{"role": "user", "content": "What is the weather in Oslo?"}]
+    kw = {"chat_template_kwargs": {"enable_thinking": False}}
+    no_desc = [{"type": "function", "function": {"name": "get_weather", "parameters": P}}]
+    no_params = [{"type": "function", "function": {"name": "get_weather", "description": "Get weather."}}]
+    assert len(r.prepare(dict({"model": "m", "messages": msgs, "tools": no_desc}, **kw)).ids) == 271
+    assert len(r.prepare(dict({"model": "m", "messages": msgs, "tools": no_params}, **kw)).ids) == 259
+    assert "description" not in no_desc[0]["function"]                  # the request itself is not changed
+
+
+def test_a_fill_with_floats_passes_through(r):
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {
+        "x": {"type": "number", "default": 0.5}}}}}]
+    assert r.prepare({"model": "m", "messages": [{"role": "user", "content": "hi"}], "tools": tools}) is None
