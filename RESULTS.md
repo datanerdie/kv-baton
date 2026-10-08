@@ -124,4 +124,18 @@ Strata now runs with `--max-context 524288` (KV streaming with `--kv-resident 32
 | handoff | **226 s** (Strata prefill 210 s at ~1,900 t/s, save 3.2 s, stream 10.7 s) | 4/4 |
 | Sushi alone | 631 s | 4/4 |
 
-Same answer, 2.8x faster to first token. Not pursued: delta handoffs (Strata already reuses its cached prefix when a request extends the previous one: 30K after 20K prefilled 13.6K tokens in 6.6 s, so only ~1–2 s of transfer per 100K would remain to save); energy-efficient Ethernet (disabled on the GPU box's side, so the link never uses it). Parked: the MTP draft head's state, the cause of the ~3 % slower decode after a handoff (draft acceptance 43–51 % vs 52–57 % cold). Its KV maps across, but Sushi's head needs QSA indexer state that Strata's dense drafter never computes, and Sushi declines a KV-only spec.
+Same answer, 2.8x faster to first token. Not pursued: delta handoffs (Strata already reuses its cached prefix when a request extends the previous one: 30K after 20K prefilled 13.6K tokens in 6.6 s, so only ~1–2 s of transfer per 100K would remain to save); energy-efficient Ethernet (disabled on the GPU box's side, so the link never uses it). MTP draft head after a handoff: see the next section.
+
+## MTP draft head after a handoff (2026-10-08)
+
+A converted entry carries no MTP history, so Sushi's draft head starts blind after a restore. Strata does save its drafter's KV (the 13th session layer, int8, no indexer); against Sushi's own entry for identical tokens it maps row for row (V cosine 0.973) once K is shifted by +1 position (half-split pairs, YaRN x4: 0.944 vs 0.877 unshifted on the fastest pairs), and Sushi's head positions count from the spec's base. Sushi's head is a QSA layer whose indexer state Strata never computes, but with at most ~2,048 history rows it attends densely, so an experimental tail spec (last W rows, zero indexer state; branch `kvh-mtp-tail`) is adopted by Sushi ("MTP head restored (1024 tokens from base ...)").
+
+Paired test, six 32K passages, 600 greedy tokens each:
+
+| | draft acceptance | decode t/s |
+|---|---|---|
+| handoff (no MTP history) | 50.5 % | 56.2 |
+| handoff + 1,024-row tail | 53.6 % | 55.8 |
+| Sushi's own prefill | 54.0 % | 57.4 |
+
+Paired differences: no-history vs Sushi's own decode -1.2 ± 1.4 t/s (se), tail vs no-history acceptance +3.1 ± 2.2 points but decode -0.4 ± 0.3 t/s. The decode cost of the missing history is about 2 % and not distinguishable from zero, and the tail does not recover it (Sushi's adaptive MTP evens out the extra accepted drafts), so it is not shipped. The earlier "~3 % slower" (four pairs) was within this noise.
