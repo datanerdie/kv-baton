@@ -294,6 +294,9 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 if got != EXPECTED_STRATA:
                     return False, f"Strata serves {got}, the converter expects {EXPECTED_STRATA}", None
                 stamp["strata"] = got
+                ctx = (st.get("context") or {}).get("max_positions") or st.get("cache_max_tokens")
+                if isinstance(ctx, int) and ctx > 0:
+                    stamp["strata_ctx"] = ctx                # what Strata was started with (--max-context)
             return True, "", stamp
 
         def _bigdoc(self, raw, body, streaming, threshold, label):
@@ -322,7 +325,8 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 return self._relay(raw, streaming, False)
             try:
                 root = cache_root_fn() if cache_root_fn else cfg.cache_root
-                rcfg = dataclasses.replace(cfg, cache_root=root, min_new_tokens=threshold)
+                # Strata's context is checked after the identity check, against what Strata itself reports
+                rcfg = dataclasses.replace(cfg, cache_root=root, min_new_tokens=threshold, strata_max_ctx=1 << 62)
                 restorable = best_restore(root, ids, prepared.has_tools)
                 go, why = handoff.decide(len(ids), restorable, rcfg)
             except Exception as e:
@@ -334,6 +338,10 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
             ok, reason = self._sushi_is_production()
             if ok:
                 ok, reason, stamp = self._identity()
+            if ok:
+                strata_ctx = stamp.get("strata_ctx", cfg.strata_max_ctx)
+                if len(ids) >= strata_ctx:
+                    ok, reason = False, f"prompt {len(ids)} >= Strata's context {strata_ctx}"
             if ok:
                 ok, reason = self._sushi_tokenizes_alike(prepared)
             if not ok:

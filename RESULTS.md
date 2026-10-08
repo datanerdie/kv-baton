@@ -114,3 +114,14 @@ A handoff costs ~2.9 s plus Strata's prefill at ~2,300 t/s against Sushi's ~700 
 **Automatic handoff (live 2026-10-08 04:09):** the proxy now treats every chat request on the normal aliases as a candidate and hands off at 5,000 new tokens (`KVH_AUTO_MIN_NEW_TOKENS`); smaller requests are relayed with no log line or cache scan, and the one-handoff lock no longer holds other requests. The bigdoc aliases use the same threshold. Before each handoff the proxy now also checks Sushi's version (it must be one the render was checked against) and that Strata serves the expected model and engine, and each converted entry carries `kvh.json` (versions, model, render and converter hashes). Through the gateway: an 8,211-token prompt on `qwen38-flash` 6.0 s to first token, 7,731 tokens on `qwen38-flash-think` (medium) 5.6 s, a short chat 0.3 s; `the KV round-trip and tool-calling check` passed.
 
 **Converter:** reads the session stream on its own thread while converting: 100K transfer + convert 3.3–3.5 s -> 2.3–2.7 s, output byte-identical. Transfers to the GPU box now use a Thunderbolt link when it is up (raw 12.7 vs 9.4 Gb/s on 10GbE; ssh caps both near 1 GB/s).
+
+## Strata at 512K (2026-10-08)
+
+Strata now runs with `--max-context 524288` (KV streaming with `--kv-resident 32768`: only a 32K window per attention layer stays in VRAM, the full int8 KV sits in pinned RAM, ~7 GB at 512K); the proxy reads Strata's limit from its `/v1/status`. 400K-token needle document (`doc-400k.txt`, 4 needles at ~51K / 153K / 306K / 388K), through the gateway's normal `qwen38-flash` alias (automatic handoff), thinking off, greedy:
+
+| run | first token | needles |
+|---|---|---|
+| handoff | **226 s** (Strata prefill 210 s at ~1,900 t/s, save 3.2 s, stream 10.7 s) | 4/4 |
+| Sushi alone | 631 s | 4/4 |
+
+Same answer, 2.8x faster to first token. Not pursued: delta handoffs (Strata already reuses its cached prefix when a request extends the previous one: 30K after 20K prefilled 13.6K tokens in 6.6 s, so only ~1–2 s of transfer per 100K would remain to save); energy-efficient Ethernet (disabled on the GPU box's side, so the link never uses it). Parked: the MTP draft head's state, the cause of the ~3 % slower decode after a handoff (draft acceptance 43–51 % vs 52–57 % cold). Its KV maps across, but Sushi's head needs QSA indexer state that Strata's dense drafter never computes, and Sushi declines a KV-only spec.

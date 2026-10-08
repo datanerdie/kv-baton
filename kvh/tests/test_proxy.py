@@ -558,3 +558,14 @@ def test_image_parts_are_left_alone(setup):
     content = [{"type": "text", "text": "a b"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}]
     post(url, {"model": "qwen38-flash-bigdoc", "messages": [{"role": "user", "content": content}]})
     assert up.bodies[-1]["messages"][0]["content"] == content
+
+
+@pytest.mark.parametrize("ctx, handed_off", [(131072, False), (524288, True)])
+def test_strata_context_comes_from_its_status(setup, tmp_path, ctx, handed_off):
+    up, start = setup
+    status = {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40", "context": {"max_positions": ctx}}
+    log = []; url, srv = start(200_000, steps(log, 200_000), sushi_version_fn=lambda: "1.2.0", strata_status_fn=lambda: status)
+    post(url, BIG)
+    assert (log[:1] == ["prefill"]) is handed_off
+    if not handed_off:
+        assert "prompt 200000 >= Strata's context 131072" in (tmp_path / "handoff_proxy-test.log").read_text()

@@ -18,7 +18,7 @@
   "--mtp",
   "/home/YOU/Strata-data/mtp/rt",
   "--max-context",
-  "131072",
+  "524288",
   "--rope-scaling",
   "yarn",
   "--rope-scale",
