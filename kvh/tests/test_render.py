@@ -115,12 +115,16 @@ def test_prepare_spells_sushis_settings_out_for_strata(r):
     assert p.text == direct
 
 
-@pytest.mark.parametrize("msgs", [
-    [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a", "reasoning_content": "because"}, {"role": "user", "content": "q2"}],
-    [{"role": "user", "content": "q"}, {"role": "assistant", "content": "partial"}],
-])
-def test_prepare_refuses_prior_reasoning_and_trailing_assistant(r, msgs):
-    assert r.prepare({"model": "m", "messages": msgs}) is None
+def test_prepare_refuses_a_trailing_assistant(r):
+    msgs = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "partial"}]
+    assert r.prepare_why({"model": "m", "messages": msgs}) == (None, "last message is assistant")
+
+
+def test_prepare_why_names_the_reason(r):
+    assert r.prepare_why(body("hi", response_format={"type": "json_object"})) == (None, "response_format")
+    assert r.prepare_why({"model": "m", "messages": [{"role": "critic", "content": "x"}]}) == (None, "message 0 role 'critic'")
+    p, why = r.prepare_why(body("hi"))
+    assert why is None and p.ids == r.prepare(body("hi")).ids
 
 
 TOOLS = [{"type": "function", "function": {"name": "read_file", "description": "Read a file — größe ≤ 1 MB.",
@@ -192,3 +196,37 @@ def test_a_fill_with_floats_passes_through(r):
 
 def test_renderer_identity_names_its_template_and_tokenizer(r):
     assert set(r.identity) == {"template", "tokenizer"} and all(len(v) == 16 for v in r.identity.values())
+
+
+def reasoning_loop(**assistant):
+    """A coding agent's thinking-on shape: the assistant turn of a tool round carries its reasoning back."""
+    call = {"id": "1", "type": "function", "function": {"name": "read", "arguments": '{"path": "/tmp/a.txt"}'}}
+    return [{"role": "user", "content": "read it"}, dict({"role": "assistant", "content": "", "tool_calls": [call]}, **assistant),
+            {"role": "tool", "content": "file text", "tool_call_id": "1"}]
+
+
+def test_history_reasoning_reaches_the_template_as_sushi_passes_it(r):
+    kw = {"tools": TOOLS, "chat_template_kwargs": {"enable_thinking": True}}
+    p = r.prepare(dict({"model": "m", "messages": reasoning_loop(reasoning_content="  look at a.txt\n")}, **kw))
+    assert "<think>\nlook at a.txt\n</think>" in p.text                  # the template trims it
+    fallback = r.prepare(dict({"model": "m", "messages": reasoning_loop(reasoning="look at a.txt")}, **kw))
+    assert fallback.ids == p.ids                                            # `reasoning` is Sushi's fallback spelling
+    first = r.prepare(dict({"model": "m", "messages": reasoning_loop(reasoning_content="look at a.txt", reasoning="other")}, **kw))
+    assert first.ids == p.ids                                               # reasoning_content wins
+    none = r.prepare(dict({"model": "m", "messages": reasoning_loop()}, **kw))
+    for ignored in ("", {"text": "x"}, None):                               # Sushi takes non-empty strings only
+        assert r.prepare(dict({"model": "m", "messages": reasoning_loop(reasoning_content=ignored)}, **kw)).ids == none.ids
+    assert "<think>\n\n</think>" in none.text and none.ids != p.ids
+
+
+def test_history_reasoning_before_the_last_user_turn_is_kept(r):
+    msgs = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a", "reasoning_content": "because"},
+            {"role": "user", "content": "q2"}]
+    assert "<think>\nbecause\n</think>" in r.prepare({"model": "m", "messages": msgs}).text   # preserve_thinking unset
+    off = r.prepare({"model": "m", "messages": msgs, "chat_template_kwargs": {"preserve_thinking": False}})
+    assert "because" not in off.text
+
+
+def test_reasoning_on_non_assistant_messages_is_ignored(r):
+    plain = r.prepare(body("hi"))
+    assert r.prepare({"model": "m", "messages": [{"role": "user", "content": "hi", "reasoning_content": "x"}]}).ids == plain.ids

@@ -44,6 +44,9 @@ def log(msg):
 # ~2.9 s plus Strata's prefill at ~2,300 t/s against Sushi's ~700 t/s, so it breaks even near 3,000 new tokens.
 AUTO_HANDOFF = True
 AUTO_MIN_NEW_TOKENS = int(os.environ.get("KVH_AUTO_MIN_NEW_TOKENS", "5000"))
+# Normal-alias requests that pass through are logged from this size on (prompt tokens; for a request the renderer does
+# not model, its body at ~4 bytes a token), to see what the threshold and the unmodelled cases cost (2026-10-08).
+LOG_SKIPS_FROM_TOKENS = int(os.environ.get("KVH_LOG_SKIPS_FROM_TOKENS", "2000"))
 # render.py copies Sushi's rendering rules; they were checked token for token on these versions only.
 VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0")
 # The converter assumes this Strata model (UD-IQ4_XS, YaRN 4, int8 KV) and engine (STRSESS v1).
@@ -306,18 +309,18 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                     log(f"{label}: no renderer (pass-through-only mode) -> pass through")
                 return self._relay(raw, streaming, False)
             try:
-                prepared = renderer.prepare(body)
+                prepared, why = renderer.prepare_why(body)
             except Exception as e:
                 if not quiet:
                     log(f"{label}: render failed ({type(e).__name__}: {e}) -> pass through")
                 return self._relay(raw, streaming, False)
             if prepared is None:
-                if not quiet:
-                    log(f"{label}: not a request Sushi would render as modelled -> pass through")
+                if not quiet or len(raw) >= 4 * LOG_SKIPS_FROM_TOKENS:
+                    log(f"{label}: not modelled ({why}), {len(raw)} bytes -> pass through")
                 return self._relay(raw, streaming, False)
             ids = prepared.ids
             if len(ids) < threshold:                     # cannot have threshold new tokens: no cache lookup needed
-                if not quiet:
+                if not quiet or len(ids) >= LOG_SKIPS_FROM_TOKENS:
                     log(f"{label}: prompt {len(ids)} < {threshold} -> pass through")
                 return self._relay(raw, streaming, False)
             if prepared.thinking and not think_handoff:

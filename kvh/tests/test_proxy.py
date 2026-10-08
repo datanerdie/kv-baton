@@ -69,15 +69,15 @@ class FakeSushi:
 class FakeRenderer:
     """n token ids, the real thinking resolution; the text is the ids, so FakeSushi's /tokenize can echo them."""
     def __init__(self, n): self.n = n
-    def prepare(self, body):
+    def prepare_why(self, body):
         kw = sushi_template_kwargs(body)
         if kw is None:
-            return None
+            return None, "thinking settings"
         ids = list(range(body.get("_n", self.n)))        # a test can size one request with "_n"
         sbody = {k: v for k, v in body.items() if k not in THINKING_FIELDS}
         sbody["chat_template_kwargs"] = dict(kw)
         sbody["kvh_prompt_ids"] = ids
-        return Prepared(ids, " ".join(map(str, ids)), sbody, kw["enable_thinking"], body.get("tools") is not None)
+        return Prepared(ids, " ".join(map(str, ids)), sbody, kw["enable_thinking"], body.get("tools") is not None), None
 
 
 def steps(log, n, slow=0.0, fail=None):
@@ -288,7 +288,7 @@ def test_bigdoc_non_dict_chat_template_kwargs_passes_through(setup):
 def test_renderer_exception_passes_through(setup, tmp_path):
     up, _ = setup
     class Boom:
-        def prepare(self, body): raise ValueError("template exploded")
+        def prepare_why(self, body): raise ValueError("template exploded")
     cfg = handoff.Config(cache_root=str(tmp_path), incoming=str(tmp_path), min_new_tokens=100)
     log = []
     srv = handoff_proxy.make_server(0, up.url, Boom(), cfg, steps(log, 500))
@@ -483,6 +483,19 @@ def test_auto_small_requests_pass_without_a_log_line(setup, tmp_path):
     post(url, AUTO)
     text = (tmp_path / "handoff_proxy-test.log").read_text() if (tmp_path / "handoff_proxy-test.log").exists() else ""
     assert log == [] and len(up.bodies) == 1 and "auto:" not in text
+
+
+def test_auto_skips_from_the_logging_size_on_are_logged(setup, tmp_path, monkeypatch):
+    up, start = setup
+    monkeypatch.setattr(handoff_proxy, "LOG_SKIPS_FROM_TOKENS", 50)
+    log = []; url, _ = start(100, steps(log, 100), auto_handoff=True, auto_min_new_tokens=300)
+    post(url, AUTO)                                                  # 100 tokens: under the threshold, over the size
+    post(url, dict(AUTO, reasoning_effort="bogus"))                  # not modelled, but its body is under 4 x 50 bytes
+    post(url, dict(AUTO, reasoning_effort="bogus", messages=[{"role": "user", "content": "x" * 300}]))
+    text = (tmp_path / "handoff_proxy-test.log").read_text()
+    assert log == [] and len(up.bodies) == 3
+    assert "auto: prompt 100 < 300 -> pass through" in text
+    assert text.count("not modelled") == 1 and "auto: not modelled (thinking settings)" in text
 
 
 def test_without_auto_normal_aliases_are_not_candidates(setup):

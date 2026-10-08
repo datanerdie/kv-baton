@@ -1,11 +1,13 @@
 """Render a chat request into the token ids Sushi will see (the pack's chat template via transformers).
 
-Text conversations, with or without tools, are candidates for a handoff; images, prior reasoning, a trailing
-assistant message or a tool_choice that makes Sushi add its own instruction ("required", a named function) return None
-and are passed through untouched. Tools render as Sushi renders them (checked token for token on a 10K agent
-conversation, 2026-10-07): the request's tools as given, tool-call arguments as a mapping; tool_choice "none" drops
-them. Strata does not render tools the same way (it unwraps each tool to its function object), so it gets the prompt
-as token ids (`kvh_prompt_ids`, local Strata patch) and renders nothing itself.
+Text conversations, with or without tools, are candidates for a handoff; images, a trailing assistant message or a
+tool_choice that makes Sushi add its own instruction ("required", a named function) return None and are passed through
+untouched. Tools render as Sushi renders them (checked token for token on a 10K agent conversation, 2026-10-07): the
+request's tools as given, tool-call arguments as a mapping; tool_choice "none" drops them. Reasoning an agent sends
+back on assistant history goes to the template as Sushi passes it (server.zig messageReasoningFromObj, 2026-10-08):
+`reasoning_content`, else `reasoning`, non-empty strings only, assistant turns only; the template then keeps it on
+every turn unless preserve_thinking is false. Strata does not render tools the same way (it unwraps each tool to its
+function object), so it gets the prompt as token ids (`kvh_prompt_ids`, local Strata patch) and renders nothing itself.
 
 Thinking follows Sushi's own rules (1.1.1, unchanged in 1.2.0 while no --think flag is set) (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
 qwen38EffortFor), which differ from the template's defaults: `reasoning_effort` counts only at the top level (inside
@@ -93,6 +95,15 @@ def _text(c):
     return c if isinstance(c, str) else None
 
 
+def _reasoning(m):
+    """The history reasoning Sushi hands the template for an assistant message, or None."""
+    for k in ("reasoning_content", "reasoning"):
+        v = m.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
 def _tool_calls(calls):
     """Assistant tool calls for the template (it iterates `arguments|items`): JSON-string arguments parsed, as Sushi
     does. None when they are not well-formed."""
@@ -169,51 +180,56 @@ class Renderer:
                          "tokenizer": h(open(tj, "rb").read()) if os.path.exists(tj) else None}
 
     def prepare(self, body):
-        if body.get("functions") or body.get("response_format") or body.get("ignore_eos"):
-            return None                         # Sushi writes a schema instruction into the prompt / refuses ignore_eos
+        return self.prepare_why(body)[0]
+
+    def prepare_why(self, body):
+        """(Prepared, None), or (None, why) when Sushi would not render the request the way this module models."""
+        for k in ("functions", "response_format", "ignore_eos"):
+            if body.get(k):
+                return None, k                  # Sushi writes a schema instruction into the prompt / refuses ignore_eos
         tools = body.get("tools")
         choice = tool_choice_kind(body.get("tool_choice"))
         if tools is not None and choice in ("required", "named"):
-            return None                         # Sushi appends its own "You MUST call ..." instruction
+            return None, f"tool_choice {choice}"   # Sushi appends its own "You MUST call ..." instruction
         if choice == "none" or tools is None:
             tools, has_tools = None, False
         elif not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
-            return None
+            return None, "malformed tools"
         else:
             has_tools = True
             tools = sushi_tools(tools)
             if tools is None:
-                return None
+                return None, "unmodelled tool schema"
         msgs = []
-        for m in body.get("messages") or []:
+        for i, m in enumerate(body.get("messages") or []):
             role = m.get("role")
             if role not in ("system", "user", "assistant", "tool"):
-                return None
-            if m.get("reasoning_content") or m.get("reasoning"):
-                return None
+                return None, f"message {i} role {role!r}"
             c = _text(m.get("content"))
             if c is None:
-                return None
+                return None, f"message {i} ({role}) content not plain text"
             msg = {"role": role, "content": c}
+            if role == "assistant" and _reasoning(m) is not None:
+                msg["reasoning_content"] = _reasoning(m)
             if m.get("tool_calls"):
                 if role != "assistant":
-                    return None
+                    return None, f"message {i} ({role}) has tool_calls"
                 calls = _tool_calls(m["tool_calls"])
                 if calls is None:
-                    return None
+                    return None, f"message {i} unmodelled tool_calls"
                 msg["tool_calls"] = calls
             msgs.append(msg)
         if not msgs or msgs[-1]["role"] not in ("user", "tool"):
-            return None
+            return None, "no messages" if not msgs else f"last message is {msgs[-1]['role']}"
         kw = sushi_template_kwargs(body)
         if kw is None:
-            return None
+            return None, "thinking settings Sushi refuses or this module does not model"
         text = self.tok.apply_chat_template(msgs, tools=tools or None, tokenize=False, add_generation_prompt=True, **kw)
         ids = self.tok.encode(text, add_special_tokens=False)
         sbody = {k: v for k, v in body.items() if k not in THINKING_FIELDS}
         sbody["chat_template_kwargs"] = dict(kw)
         sbody["kvh_prompt_ids"] = ids
-        return Prepared(ids, text, sbody, kw["enable_thinking"], has_tools)
+        return Prepared(ids, text, sbody, kw["enable_thinking"], has_tools), None
 
     def render_ids(self, body):
         p = self.prepare(body)

@@ -139,3 +139,10 @@ Paired test, six 32K passages, 600 greedy tokens each:
 | Sushi's own prefill | 54.0 % | 57.4 |
 
 Paired differences: no-history vs Sushi's own decode -1.2 ± 1.4 t/s (se), tail vs no-history acceptance +3.1 ± 2.2 points but decode -0.4 ± 0.3 t/s. The decode cost of the missing history is about 2 % and not distinguishable from zero, and the tail does not recover it (Sushi's adaptive MTP evens out the extra accepted drafts), so it is not shipped. The earlier "~3 % slower" (four pairs) was within this noise.
+
+
+## Agent reasoning history hands off (2026-10-08)
+
+Until now the render refused any request whose history carried reasoning. Coding agents running with thinking on commonly send `reasoning_content` back on every assistant turn, so in such a session only the first request could hand off. Measured with a read-only agent session: 3 of 4 agent requests passed through, among them the turns that had just read two files (~12K and ~7K new tokens). Thinking-off sessions send no reasoning and were unaffected (handoffs at 9,082 and 5,978 new tokens).
+
+Sushi hands that reasoning to the template (`server.zig` `messageReasoningFromObj`): `reasoning_content`, else `reasoning`, non-empty strings only, assistant turns only; the Qwen template trims it and, with `preserve_thinking` unset, keeps it on every turn, not only after the last user message. `render.py` now does the same. Live, in a two-turn agent session with thinking on: the render matched Sushi's own cache 22,735 tokens deep across an assistant turn with reasoning, and a 32,598-token request with 9,184 new tokens handed off (prefill 16.1 s) and was restored by Sushi at 32,593 tokens. The proxy now also logs why a request of 2,000 tokens or more passed through (`KVH_LOG_SKIPS_FROM_TOKENS`), to size the 3–5K range below the handoff threshold.
