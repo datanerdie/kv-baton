@@ -1,4 +1,4 @@
-From d01a4a11389263fbb4f1bd12e319bfe2705f54c9 Mon Sep 17 00:00:00 2001
+From fa789871e8ed50170b1136f1c6c9b8288b20072c Mon Sep 17 00:00:00 2001
 From: kvh <kvh@localhost>
 Date: Wed, 7 Oct 2026 17:05:32 +0800
 Subject: [PATCH] KVH (local patch): POST /v1/kvh/import indexes an SSD-tier
@@ -11,7 +11,7 @@ Subject: [PATCH] KVH (local patch): POST /v1/kvh/import indexes an SSD-tier
  3 files changed, 67 insertions(+)
 
 diff --git a/src/kv_disk_cache.zig b/src/kv_disk_cache.zig
-index e8f74bcf..2747bca0 100644
+index cfb656c..caf7fb2 100644
 --- a/src/kv_disk_cache.zig
 +++ b/src/kv_disk_cache.zig
 @@ -61,6 +61,16 @@ const io_util = @import("io_util.zig");
@@ -31,7 +31,7 @@ index e8f74bcf..2747bca0 100644
  const KVCache = transformer_mod.KVCache;
  
  /// Restoring from disk only happens when it beats the best RAM match by at
-@@ -3624,6 +3634,37 @@ pub const DiskTier = struct {
+@@ -3691,6 +3701,37 @@ pub const DiskTier = struct {
          }
      }
  
@@ -70,7 +70,7 @@ index e8f74bcf..2747bca0 100644
      /// first entry to see an inode pays for it.
      fn billChunksOnce(self: *DiskTier, e: *IndexEntry, seen: *std.AutoHashMap(u64, void)) void {
 diff --git a/src/prefix_cache.zig b/src/prefix_cache.zig
-index 059b64b1..997cc953 100644
+index 059b64b..997cc95 100644
 --- a/src/prefix_cache.zig
 +++ b/src/prefix_cache.zig
 @@ -20,6 +20,7 @@ const transformer_mod = @import("transformer.zig");
@@ -91,7 +91,7 @@ index 059b64b1..997cc953 100644
              try target_cache.truncate(0, s);
              rec.reset();
 diff --git a/src/server.zig b/src/server.zig
-index d8fb80ce..cb9a920e 100644
+index fb54032..299bb59 100644
 --- a/src/server.zig
 +++ b/src/server.zig
 @@ -919,6 +919,7 @@ const ROUTE_PATHS = [_][]const u8{
@@ -102,7 +102,7 @@ index d8fb80ce..cb9a920e 100644
      "/v1/load-model",
      "/v1/messages",
      "/v1/models",
-@@ -2802,6 +2803,11 @@ fn handleConnection(
+@@ -2832,6 +2833,11 @@ fn handleConnection(
          const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
          const body = request[header_end + 4 .. total_read];
          try handleResponses(allocator, stream, body, lm);
@@ -114,7 +114,7 @@ index d8fb80ce..cb9a920e 100644
      } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/tokenize")) {
          const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
          const body = request[header_end + 4 .. total_read];
-@@ -8898,6 +8904,23 @@ fn truncateEmbeddingDims(embedding: []f32, dims: usize) []f32 {
+@@ -8941,6 +8947,23 @@ fn truncateEmbeddingDims(embedding: []f32, dims: usize) []f32 {
      return out;
  }
  

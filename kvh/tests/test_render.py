@@ -160,8 +160,10 @@ def test_tool_call_arguments_as_string_or_mapping_render_alike(r):
     assert a.ids == b.ids
 
 
-def test_malformed_tool_call_arguments_pass_through(r):
-    assert r.prepare({"model": "m", "messages": agent('{"path": '), "tools": TOOLS}) is None
+@pytest.mark.parametrize("args", ['{"path": ', "", "  ", "null", None, "[1, 2]", "3", '"x"', [1], 3])
+def test_non_object_tool_call_arguments_render_as_empty_object_like_sushi_121(r, args):
+    a = r.prepare({"model": "m", "messages": agent(args), "tools": TOOLS})
+    assert a is not None and a.ids == r.prepare({"model": "m", "messages": agent("{}"), "tools": TOOLS}).ids
 
 
 def test_tool_choice_none_drops_the_tools_like_sushi(r):

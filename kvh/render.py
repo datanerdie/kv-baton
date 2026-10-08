@@ -9,7 +9,7 @@ back on assistant history goes to the template as Sushi passes it (server.zig me
 every turn unless preserve_thinking is false. Strata does not render tools the same way (it unwraps each tool to its
 function object), so it gets the prompt as token ids (`kvh_prompt_ids`, local Strata patch) and renders nothing itself.
 
-Thinking follows Sushi's own rules (1.1.1, unchanged in 1.2.0 while no --think flag is set) (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
+Thinking follows Sushi's own rules (1.1.1, unchanged in 1.2.0 and 1.2.1 while no --think flag is set) (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
 qwen38EffortFor), which differ from the template's defaults: `reasoning_effort` counts only at the top level (inside
 chat_template_kwargs it is ignored), thinking on without an effort word is "low", and a request naming neither is
 thinking off. Strata follows the template, so it gets the resolved settings written out explicitly.
@@ -65,7 +65,7 @@ def _has_float(v):
 
 
 def sushi_tools(tools):
-    """The tool list as Sushi hands it to the template (chat.zig fillOptionalToolDefKeys, 1.1.1 and 1.2.0): a function
+    """The tool list as Sushi hands it to the template (chat.zig fillOptionalToolDefKeys, 1.1.1 to 1.2.1): a function
     without "description" gets "" and one without "parameters" gets an empty object schema, appended after its own
     keys. None when Sushi would re-serialise numbers we cannot promise to reproduce (a fill plus a float)."""
     out, changed = [], False
@@ -106,7 +106,8 @@ def _reasoning(m):
 
 def _tool_calls(calls):
     """Assistant tool calls for the template (it iterates `arguments|items`): JSON-string arguments parsed, as Sushi
-    does. None when they are not well-formed."""
+    does; arguments that are not a JSON object (empty, null, an array, a scalar, malformed text) become {}, as Sushi
+    1.2.1 embeds them (chat.zig serializeMessagesJsonImpl). None when a call itself is not well-formed."""
     if not isinstance(calls, list):
         return None
     out = []
@@ -117,13 +118,11 @@ def _tool_calls(calls):
         args = fn.get("arguments")
         if isinstance(args, str):
             try:
-                args = json.loads(args) if args.strip() else {}
+                args = json.loads(args)
             except ValueError:
-                return None
-        if args is None:
-            args = {}
+                args = None
         if not isinstance(args, dict):
-            return None
+            args = {}
         out.append({"type": "function", "function": {"name": fn["name"], "arguments": args}})
     return out
 

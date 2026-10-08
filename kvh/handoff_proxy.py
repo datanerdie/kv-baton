@@ -48,7 +48,7 @@ AUTO_MIN_NEW_TOKENS = int(os.environ.get("KVH_AUTO_MIN_NEW_TOKENS", "5000"))
 # not model, its body at ~4 bytes a token), to see what the threshold and the unmodelled cases cost (2026-10-08).
 LOG_SKIPS_FROM_TOKENS = int(os.environ.get("KVH_LOG_SKIPS_FROM_TOKENS", "2000"))
 # render.py copies Sushi's rendering rules; they were checked token for token on these versions only.
-VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0")
+VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1")
 # The converter assumes this Strata model (UD-IQ4_XS, YaRN 4, int8 KV) and engine (STRSESS v1).
 EXPECTED_STRATA = {"model": os.environ.get("KVH_STRATA_MODEL", "qwen3.8-flash-next-unsloth-ud-iq4_xs"),
                    "engine": os.environ.get("KVH_STRATA_ENGINE", "0.1.40")}

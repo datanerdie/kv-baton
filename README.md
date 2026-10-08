@@ -19,11 +19,11 @@ The model is Qwen3.8-Flash-Next, a hybrid MoE (Gated DeltaNet layers plus 12 spa
 
 ## Performance
 
-Measured on the setup below, Sushi 1.2.0 and Strata v0.1.40.1, through the proxy, thinking off and greedy unless noted. Details and history are in [RESULTS.md](RESULTS.md).
+Measured on the setup below with Sushi 1.2.0 and Strata v0.1.40.1 (Sushi 1.2.1 re-checked at 100K: ~50 s first token, unchanged), through the proxy, thinking off and greedy unless noted. Details and history are in [RESULTS.md](RESULTS.md).
 
 | | machine | role |
 |---|---|---|
-| Sushi 1.2.0, `Qwen3.8-Flash-Next-Sushi-4bpw` | M4 Max Mac Studio, 128 GB | serves every request, does all decoding |
+| Sushi 1.2.1, `Qwen3.8-Flash-Next-Sushi-4bpw` | M4 Max Mac Studio, 128 GB | serves every request, does all decoding |
 | Strata v0.1.40.1, unsloth `UD-IQ4_XS` GGUF, `--kv int8`, 512K context | Linux box, 2x RTX 3090 (24 GB each) | prefill only |
 | the link between them | 10GbE, or a Thunderbolt cable | ssh streams ~0.9–1.0 GB/s either way |
 
@@ -100,7 +100,7 @@ While a handoff runs, a streaming client gets SSE comment lines (`: handoff <ste
 | `kvh/strata_dump.cpp` | dumps a Strata session file to raw arrays (the older two-step path; useful for inspection) |
 | `kvh/sushi_entry.py`, `kvh/compare_states.py` | read a Sushi entry; compare converted state against Sushi's own |
 | `kvh/needle_test.py`, `kvh/client.py` | the needle test and the benchmark client |
-| `kvh/sushi-kvh-import.patch`, `kvh/build-sushi-kvh.sh` | Sushi patch adding `POST /v1/kvh/import {"id": N}` (for 1.2.0; the 1.1.1 version is in the git history), and a build script that needs no Xcode |
+| `kvh/sushi-kvh-import.patch`, `kvh/build-sushi-kvh.sh` | Sushi patch adding `POST /v1/kvh/import {"id": N}` (for 1.2.1; the versions for 1.1.1 and 1.2.0 are in the git history), and a build script that needs no Xcode |
 | `kvh/strata-kvh-prompt-ids.patch` | Strata patch: an optional `kvh_prompt_ids` on `/v1/chat/completions` replaces the template render (Python server only) |
 | `kvh/strata-peer-session.patch` | Strata patch: allow session files with `--peer-device` when `STRATA_ALLOW_PEER_SESSION=1` (two GPUs) |
 | `kvh/gpu-box/start-strata.sh` | starts Strata on the GPU box with the patched binary |
@@ -114,7 +114,7 @@ This was built for one specific pair of machines; expect to adapt paths.
 
 **GPU box.** Install Strata v0.1.40.1 and apply `kvh/strata-kvh-prompt-ids.patch` (required: without it Strata renders tools differently from Sushi and tool conversations never hand off; plain requests still work). For two GPUs, build its engine with `kvh/strata-peer-session.patch` applied (one GPU works with the stock engine, at ~1,500 tokens/s). Pack `unsloth/Qwen3.8-Flash-Next-GGUF` `UD-IQ4_XS` with Strata's tools and write a server config like `examples/strata-peer.json`. YaRN factor 4 and `--kv int8` are required, since the converter assumes them. `--max-context 524288` with `--kv-resident 32768` keeps only a 32K window per attention layer in VRAM and the full KV in pinned RAM (~7 GB at 512K). Start it with `kvh/gpu-box/start-strata.sh`.
 
-**Mac.** Install Sushi 1.2.0 (`brew install beamivalice/tap/sushi`, or unpack the release tarball and point `SUSHI_REL_LIB` at its `lib`) with the `Qwen3.8-Flash-Next-Sushi-4bpw` pack, then build the patched server with `kvh/build-sushi-kvh.sh` (`SUSHI_VERSION` picks the release, default 1.2.0) and run that binary instead of Homebrew's. Do not start it with `--think`: it changes the thinking defaults the proxy copies, so the proxy then hands nothing off. Stock Sushi also works: the proxy then restarts Sushi to make it load the entry (~10 s more, and other requests wait during the restart). Then:
+**Mac.** Install Sushi 1.2.1 (`brew install beamivalice/tap/sushi`, or unpack the release tarball and point `SUSHI_REL_LIB` at its `lib`) with the `Qwen3.8-Flash-Next-Sushi-4bpw` pack, then build the patched server with `kvh/build-sushi-kvh.sh` (`SUSHI_VERSION` picks the release, default 1.2.1) and run that binary instead of Homebrew's. Do not start it with `--think`: it changes the thinking defaults the proxy copies, so the proxy then hands nothing off. Stock Sushi also works: the proxy then restarts Sushi to make it load the entry (~10 s more, and other requests wait during the restart). Then:
 
 ```sh
 uv run --with pytest --with transformers --with jinja2 pytest kvh/tests -q      # 162 passed, 2 skipped
@@ -141,17 +141,17 @@ Point clients (or a gateway, see `examples/litellm.yaml`) at `http://127.0.0.1:8
 | `KVH_UV` [`~/.local/bin/uv`] | uv, used to run the converter with `mlx` and `numpy` |
 | `KVH_FORCE_ALL`, `KVH_MIN_NEW_TOKENS`, `KVH_INCOMING`, `KVH_PROXY_LOG` | for a separate test instance that hands off every request |
 
-The proxy only hands off while the expected model (`Qwen3.8-Flash-Next-Sushi-4bpw` at 1,048,576 context) is what Sushi reports, and only to a Sushi version whose rendering rules it was checked against (1.1.1, 1.2.0); anything else is passed through.
+The proxy only hands off while the expected model (`Qwen3.8-Flash-Next-Sushi-4bpw` at 1,048,576 context) is what Sushi reports, and only to a Sushi version whose rendering rules it was checked against (1.1.1, 1.2.0, 1.2.1); anything else is passed through.
 
 ## Limits
 
-- **Thinking follows Sushi's rules, not the template's** (1.1.1 and 1.2.0 without `--think`). Sushi reads `reasoning_effort` only as a top-level field (inside `chat_template_kwargs` it is ignored), runs thinking-on without an effort word at low, and a request naming neither with thinking off; 1.2.0 refuses "minimal". `kvh/render.py` copies these rules, so re-check them on every Sushi upgrade: the `/tokenize` check covers the tokenizer, not the template. Requests with a top-level `reasoning` object or `response_format` (Sushi writes a schema instruction into the prompt) pass through. Reasoning that an agent sends back on earlier assistant turns (`reasoning_content`, or `reasoning` as a string) is rendered the way Sushi hands it to the template, which keeps it on every turn while `preserve_thinking` is unset.
-- **Tools hand off, images do not.** Tools render as Sushi renders them (the request's tool objects as sent, a missing `description` or `parameters` filled in as Sushi fills it, JSON-string call arguments parsed); a conversation may end with a tool result. `tool_choice` "none" drops the tools as Sushi does; "required" or a named function pass through, because Sushi adds its own instruction for those. Sushi's cache key includes `has_tools`: the proxy's lookup filters on it and the handoff marks the entry.
+- **Thinking follows Sushi's rules, not the template's** (1.1.1 to 1.2.1 without `--think`). Sushi reads `reasoning_effort` only as a top-level field (inside `chat_template_kwargs` it is ignored), runs thinking-on without an effort word at low, and a request naming neither with thinking off; since 1.2.0 it refuses "minimal". `kvh/render.py` copies these rules, so re-check them on every Sushi upgrade: the `/tokenize` check covers the tokenizer, not the template. Requests with a top-level `reasoning` object or `response_format` (Sushi writes a schema instruction into the prompt) pass through. Reasoning that an agent sends back on earlier assistant turns (`reasoning_content`, or `reasoning` as a string) is rendered the way Sushi hands it to the template, which keeps it on every turn while `preserve_thinking` is unset.
+- **Tools hand off, images do not.** Tools render as Sushi renders them (the request's tool objects as sent, a missing `description` or `parameters` filled in as Sushi fills it, JSON-string call arguments parsed, and arguments that are not a JSON object, such as empty or malformed text, rendered as `{}` as Sushi 1.2.1 does); a conversation may end with a tool result. `tool_choice` "none" drops the tools as Sushi does; "required" or a named function pass through, because Sushi adds its own instruction for those. Sushi's cache key includes `has_tools`: the proxy's lookup filters on it and the handoff marks the entry.
 - **Exact token agreement is required, and checked twice.** Before the prefill the rendered text goes to Sushi's `/tokenize` (0.1 s at 100K); after it, the token ids in Strata's session are compared with the render. Requests reach Sushi unchanged. Any mismatch is caught and passed through.
 - **Up to Strata's context**, 524,288 tokens in the example config. The proxy reads the limit from Strata's `/v1/status`; longer prompts go to Sushi alone.
 - **One handoff at a time.** A second big prompt waits for the first; Strata already reuses its cached prefix when a request extends the previous one. Strata needs the GPUs to itself, so stop anything else using them before starting it.
 - **Sushi prefers its own cache** unless the converted entry is at least 256 tokens longer than the prefix it already holds in RAM, so very short or repeated prompts are answered from Sushi's own state.
-- The converter is written against Sushi's cache format v8 (unchanged from 1.1.1 to 1.2.0) and Strata's STRSESS v1 session format. Either upstream can change these at any time.
+- The converter is written against Sushi's cache format v8 (unchanged from 1.1.1 to 1.2.1) and Strata's STRSESS v1 session format. Either upstream can change these at any time.
 
 ## Licence
 
