@@ -117,7 +117,7 @@ This was built for one specific pair of machines; expect to adapt paths.
 **Mac.** Install Sushi 1.2.0 (`brew install beamivalice/tap/sushi`, or unpack the release tarball and point `SUSHI_REL_LIB` at its `lib`) with the `Qwen3.8-Flash-Next-Sushi-4bpw` pack, then build the patched server with `kvh/build-sushi-kvh.sh` (`SUSHI_VERSION` picks the release, default 1.2.0) and run that binary instead of Homebrew's. Do not start it with `--think`: it changes the thinking defaults the proxy copies, so the proxy then hands nothing off. Stock Sushi also works: the proxy then restarts Sushi to make it load the entry (~10 s more, and other requests wait during the restart). Then:
 
 ```sh
-uv run --with pytest --with transformers --with jinja2 pytest kvh/tests -q      # 160 passed, 1 skipped
+uv run --with pytest --with transformers --with jinja2 pytest kvh/tests -q      # 162 passed, 2 skipped
 cp kvh/launchd/*.plist ~/Library/LaunchAgents/      # after editing paths and the ssh host
 launchctl load ~/Library/LaunchAgents/local.kvh-tunnel.plist ~/Library/LaunchAgents/local.kvh-proxy.plist
 ```

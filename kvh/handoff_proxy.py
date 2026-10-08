@@ -183,15 +183,22 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                     if not headers_sent:
                         self._sse_headers(r.status)
                     lines = iter(r)
+                    done = False      # Sushi ends every complete stream with data: [DONE]
                     while True:
                         try:
                             line = next(lines)
                         except StopIteration:
+                            # http.client can report a cut-off chunked stream as a clean end; only [DONE] tells them apart
+                            if not done:
+                                log("relay: upstream stream ended without [DONE]")
+                                self._chunk(b"data: " + json.dumps({"error": "Sushi stream broke off before [DONE]"}).encode() + b"\n\n")
                             break
                         except (OSError, http.client.HTTPException) as e:    # upstream broke; client writes are below
                             log(f"relay: upstream stream failed: {type(e).__name__}: {e}")
                             self._chunk(b"data: " + json.dumps({"error": f"Sushi stream broke off: {e}"}).encode() + b"\n\n")
                             break
+                        if line.strip() == b"data: [DONE]":
+                            done = True
                         if expect_cached is not None and b'"usage"' in line and line.startswith(b"data:"):
                             self._check_cached(line[5:], expect_cached)
                         self._chunk(line)

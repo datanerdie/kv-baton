@@ -23,6 +23,7 @@ class FakeSushi:
         self.models = {"data": [{"id": handoff_proxy.EXPECTED_SUSHI_MODEL, "context_length": handoff_proxy.EXPECTED_SUSHI_CTX}]}
         self.models_status = 200                      # GET /v1/models: configurable document and status
         self.reply, self.break_stream = None, False   # reply: raw non-streaming bytes; break_stream: die mid-SSE
+        self.no_done = False                          # end the SSE stream cleanly but without data: [DONE]
         self.tokenize = None                          # /tokenize: None = echo the render's ids back, else this reply
         outer = self
         class H(BaseHTTPRequestHandler):
@@ -54,7 +55,8 @@ class FakeSushi:
                         self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
                         self.close_connection = True
                         return
-                    for line in (b'data: {"choices":[{"delta":{"content":"hi"}}]}\n', b"\n", b"data: [DONE]\n", b"\n"):
+                    lines = (b'data: {"choices":[{"delta":{"content":"hi"}}]}\n', b"\n", b"data: [DONE]\n", b"\n")
+                    for line in lines[:2] if outer.no_done else lines:
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(line), line))
                     self.wfile.write(b"0\r\n\r\n")
                 else:
@@ -327,6 +329,22 @@ def test_upstream_stream_breaking_midway_ends_cleanly_with_error_event(setup):
     url, _ = start(10, steps([], 10))
     raw = post(url, {"model": "m", "messages": [], "stream": True}, raw=True, timeout=10)
     assert b'"content":"hi"' in raw and b'"error"' in raw
+
+
+def test_upstream_stream_ending_without_done_gets_error_event(setup):
+    # http.client can report a cut-off chunked stream as a clean end, so only the missing [DONE] shows it
+    up, start = setup
+    up.no_done = True
+    url, _ = start(10, steps([], 10))
+    raw = post(url, {"model": "m", "messages": [], "stream": True}, raw=True, timeout=10)
+    assert b'"content":"hi"' in raw and b'"error"' in raw
+
+
+def test_complete_stream_gets_no_error_event(setup):
+    up, start = setup
+    url, _ = start(10, steps([], 10))
+    raw = post(url, {"model": "m", "messages": [], "stream": True}, raw=True, timeout=10)
+    assert raw.rstrip().endswith(b"data: [DONE]") and b'"error"' not in raw
 
 
 
