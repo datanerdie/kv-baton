@@ -1,4 +1,4 @@
-From 572132b6e5f50d51bf22f60383a4f5562ed2c831 Mon Sep 17 00:00:00 2001
+From 5785dcadfbb9cc8293011e3bc6d31b0fc29bd09f Mon Sep 17 00:00:00 2001
 From: kvh <kvh@localhost>
 Date: Wed, 7 Oct 2026 21:57:13 +0800
 Subject: [PATCH] KVH: optional kvh_prompt_ids on /v1/chat/completions replaces
@@ -16,10 +16,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 serve/test_kvh_prompt_ids.py
 
 diff --git a/serve/server.py b/serve/server.py
-index d6b1fc3..51d1175 100644
+index 553f440..9685328 100644
 --- a/serve/server.py
 +++ b/serve/server.py
-@@ -1980,6 +1980,17 @@ def vision_env(cfg: dict, env: dict) -> dict:
+@@ -2426,6 +2426,17 @@ def vision_env(cfg: dict, env: dict) -> dict:
      return env
  
  
@@ -37,12 +37,12 @@ index d6b1fc3..51d1175 100644
  class ByteTokenizer:
      """Tiny stand-in tokenizer for tests without the pack: one id per UTF-8 byte, specials as ids >= 256."""
      SPECIALS = ["<|im_start|>", "<|im_end|>", "<|endoftext|>", "<|vision_start|>", "<|image_pad|>", "<|vision_end|>"]
-@@ -2734,12 +2745,18 @@ class Service:
+@@ -3206,12 +3217,18 @@ class Service:
                      content[n] = {"type": "text", "text": f"[image omitted: {why}]"}
          return fetched
  
--    def prepare(self, messages, tools, kwargs, max_new=None, force=None):
-+    def prepare(self, messages, tools, kwargs, max_new=None, force=None, prompt_ids=None):
+-    def prepare(self, messages, tools, kwargs, max_new=None, force=None, req=None):
++    def prepare(self, messages, tools, kwargs, max_new=None, force=None, req=None, prompt_ids=None):
          """-> (ids, thinking, max_new). An unset or non-positive max_new (some clients send -1) means "unlimited":
          the rest of the context.  `force` (forced_call): without thinking the reply starts with it, so it ends the
 -        prompt; with thinking, Service.run writes it once the thinking is over."""
@@ -59,12 +59,12 @@ index d6b1fc3..51d1175 100644
          if force and kwargs.get("enable_thinking", True) is False:
              ids = ids + self.tok.encode(force, parse_special=True)
          self.embeddings.path = None
-@@ -4213,7 +4230,8 @@ def make_handler(svc: Service):
+@@ -4962,7 +4979,8 @@ def make_handler(svc: Service):
                  raise ValueError("a forced tool_choice with MCP tools is not supported")
              svc.reasoning_budget(req)                         # a bad value is a 400 before anything is sent
              stop_strings(req)                                 # ... and so is a bad stop / stop_sequences
--            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force)
-+            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force,
+-            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force, req=req)
++            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new, force=force, req=req,
 +                                                 prompt_ids=kvh_prompt_ids(req))
              _debug_req("openai", req, messages, tools, max_new, thinking, len(ids))
              cancel = threading.Event()

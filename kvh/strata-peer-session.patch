@@ -1,4 +1,4 @@
-From 3a8afed4876116dcf446274eebd0675d1f0748b0 Mon Sep 17 00:00:00 2001
+From f7116c8dcf50c401c7c3b1ab2710213a6484fd37 Mon Sep 17 00:00:00 2001
 From: kvh <kvh@localhost>
 Date: Wed, 7 Oct 2026 14:10:09 +0800
 Subject: [PATCH] KVH experiment: allow session files with --peer-device under
@@ -9,10 +9,10 @@ Subject: [PATCH] KVH experiment: allow session files with --peer-device under
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/src/program/generate.cpp b/src/program/generate.cpp
-index 3b551f3..8372aba 100644
+index 433d395..df6b7cb 100644
 --- a/src/program/generate.cpp
 +++ b/src/program/generate.cpp
-@@ -7843,7 +7843,9 @@ int main(int argc, char** argv) {
+@@ -8738,7 +8738,9 @@ int main(int argc, char** argv) {
                  strata::core::progress_at(save ? "saving a session" : "restoring a session");
                  if (path.empty()) { refuse("missing path"); continue; }
                  if (!stages.empty() || multi_gpu) { refuse("session files do not support --layer-split"); continue; }

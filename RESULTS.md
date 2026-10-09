@@ -152,3 +152,17 @@ Sushi hands that reasoning to the template (`server.zig` `messageReasoningFromOb
 **Sushi 1.2.1** (kvh build, in production since 2026-10-08 13:48). The import patch applies with line offsets only (regenerated); the MLX pins and release dylibs are byte-identical to 1.2.0. Cache format, fingerprint and entry layout are unchanged; the new root lock and private second-process root do not touch a single Sushi, and the startup sweep of index-less entries cannot catch an import, which is staged outside the root and renamed in. Thinking, effort, reasoning history and tool-definition fill are byte-identical in the source. The one render change: a history tool call whose arguments are not a JSON object (empty, null, an array, a scalar, malformed text) is now embedded as `{}` (before, the template raised and Sushi fell back to a generic format, dropping the call), so `render.py` now does the same instead of passing such requests through. NLL identical to 1.2.0 to the last digit (0.280633139 / 0.121696140); the KV round-trip and tool-calling check passed: tool calls 28/28, 31 of 8,740 tokens reprocessed after a restart.
 
 Live 100K handoffs through the gateway (fresh nonce, needle 1): plain 51.2 s, thinking 49.8 s, tools 49.7 s first token, all three answers correct. The tools case carries two history calls with empty and malformed arguments; Sushi restored 100,853 cached tokens against a restore point of 100,852, so the `{}` render matches token for token.
+
+## Strata v0.1.41 (2026-10-09)
+
+Both Strata patches rebased onto v0.1.41: the peer-session patch applies unchanged; the prompt-ids patch now passes both upstream's new `req` argument and `prompt_ids` to `Service.prepare` (upstream uses `req` only for its opt-in `strata_prefix`). Upstream's 597 server tests and the patch's own 4 pass. The session format only gained the opt-in `pin=N`, which the converter does not use. The proxy accepts a list of validated engines (`KVH_STRATA_ENGINES`, default `0.1.40,0.1.41`).
+
+Measured live through the gateway (fresh documents, greedy, thinking off), v0.1.40.1 first the same morning, one engine at a time:
+
+| Strata prefill | v0.1.40.1 | v0.1.41 | change |
+|---|---:|---:|---:|
+| 32K (median of 2) | 15.13 s | 14.69 s | -2.9% |
+| 100K (median of 2) | 44.45 s | 43.10 s | -3.0% |
+| 400K (v0.1.40.1 from the 512K run above) | 210 s | 204.1 s | -2.9% |
+
+First token at 100K 49.1 -> 47.7 s, at 400K 226 -> 218.9 s. Needles 1/1 at 100K and 4/4 at 400K on both; a tools request (20.7K tokens, the tool was called) and a thinking request (20.4K, medium effort, correct answer) handed off and restored. v0.1.41's new default, part of the experts of prompt chunks under 1,024 tokens computed on the idle CPU ("mean KL ~0.004"; `STRATA_PREFILL_CPU_SHARE=0` turns it off), was on; nothing differed in these checks.

@@ -19,12 +19,12 @@ The model is Qwen3.8-Flash-Next, a hybrid MoE (Gated DeltaNet layers plus 12 spa
 
 ## Performance
 
-Measured on the setup below with Sushi 1.2.0 and Strata v0.1.40.1 (Sushi 1.2.1 re-checked at 100K: ~50 s first token, unchanged), through the proxy, thinking off and greedy unless noted. Details and history are in [RESULTS.md](RESULTS.md).
+Measured on the setup below with Sushi 1.2.0 and Strata v0.1.40.1 (Sushi 1.2.1 re-checked at 100K: ~50 s first token, unchanged; Strata v0.1.41 re-measured: prefill ~3% faster at 32K, 100K and 400K, same results, see RESULTS.md), through the proxy, thinking off and greedy unless noted. Details and history are in [RESULTS.md](RESULTS.md).
 
 | | machine | role |
 |---|---|---|
 | Sushi 1.2.1, `Qwen3.8-Flash-Next-Sushi-4bpw` | M4 Max Mac Studio, 128 GB | serves every request, does all decoding |
-| Strata v0.1.40.1, unsloth `UD-IQ4_XS` GGUF, `--kv int8`, 512K context | Linux box, 2x RTX 3090 (24 GB each) | prefill only |
+| Strata v0.1.41, unsloth `UD-IQ4_XS` GGUF, `--kv int8`, 512K context | Linux box, 2x RTX 3090 (24 GB each) | prefill only |
 | the link between them | 10GbE, or a Thunderbolt cable | ssh streams ~0.9–1.0 GB/s either way |
 
 **Time to first token on a new prompt**
@@ -106,18 +106,18 @@ While a handoff runs, a streaming client gets SSE comment lines (`: handoff <ste
 | `kvh/gpu-box/start-strata.sh` | starts Strata on the GPU box with the patched binary |
 | `kvh/launchd/*.plist` | macOS agents for the proxy and the ssh tunnel (replace `/Users/YOU`) |
 | `examples/` | the Strata server config and the LiteLLM aliases |
-| `kvh/tests/` | 160 unit tests |
+| `kvh/tests/` | 175 unit tests |
 
 ## Setting it up
 
 This was built for one specific pair of machines; expect to adapt paths.
 
-**GPU box.** Install Strata v0.1.40.1 and apply `kvh/strata-kvh-prompt-ids.patch` (required: without it Strata renders tools differently from Sushi and tool conversations never hand off; plain requests still work). For two GPUs, build its engine with `kvh/strata-peer-session.patch` applied (one GPU works with the stock engine, at ~1,500 tokens/s). Pack `unsloth/Qwen3.8-Flash-Next-GGUF` `UD-IQ4_XS` with Strata's tools and write a server config like `examples/strata-peer.json`. YaRN factor 4 and `--kv int8` are required, since the converter assumes them. `--max-context 524288` with `--kv-resident 32768` keeps only a 32K window per attention layer in VRAM and the full KV in pinned RAM (~7 GB at 512K). Start it with `kvh/gpu-box/start-strata.sh`.
+**GPU box.** Install Strata v0.1.41 and apply `kvh/strata-kvh-prompt-ids.patch` (both patches are rebased onto v0.1.41; the v0.1.40.1 versions are in the git history) (required: without it Strata renders tools differently from Sushi and tool conversations never hand off; plain requests still work). For two GPUs, build its engine with `kvh/strata-peer-session.patch` applied (one GPU works with the stock engine, at ~1,500 tokens/s). Pack `unsloth/Qwen3.8-Flash-Next-GGUF` `UD-IQ4_XS` with Strata's tools and write a server config like `examples/strata-peer.json`. YaRN factor 4 and `--kv int8` are required, since the converter assumes them. `--max-context 524288` with `--kv-resident 32768` keeps only a 32K window per attention layer in VRAM and the full KV in pinned RAM (~7 GB at 512K). Start it with `kvh/gpu-box/start-strata.sh`.
 
 **Mac.** Install Sushi 1.2.1 (`brew install beamivalice/tap/sushi`, or unpack the release tarball and point `SUSHI_REL_LIB` at its `lib`) with the `Qwen3.8-Flash-Next-Sushi-4bpw` pack, then build the patched server with `kvh/build-sushi-kvh.sh` (`SUSHI_VERSION` picks the release, default 1.2.1) and run that binary instead of Homebrew's. Do not start it with `--think`: it changes the thinking defaults the proxy copies, so the proxy then hands nothing off. Stock Sushi also works: the proxy then restarts Sushi to make it load the entry (~10 s more, and other requests wait during the restart). Then:
 
 ```sh
-uv run --with pytest --with transformers --with jinja2 pytest kvh/tests -q      # 162 passed, 2 skipped
+uv run --with pytest --with transformers --with jinja2 pytest kvh/tests -q      # 173 passed, 2 skipped
 cp kvh/launchd/*.plist ~/Library/LaunchAgents/      # after editing paths and the ssh host
 launchctl load ~/Library/LaunchAgents/local.kvh-tunnel.plist ~/Library/LaunchAgents/local.kvh-proxy.plist
 ```
@@ -131,7 +131,7 @@ Point clients (or a gateway, see `examples/litellm.yaml`) at `http://127.0.0.1:8
 | `KVH_AUTO_MIN_NEW_TOKENS` [`5000`] | hand off from this many tokens Sushi has not cached (break-even is ~3,000) |
 | `KVH_STRATA_HOST` [`gpu-box`] | ssh host of the GPU box; sessions are read from `~/kvh/sessions` there |
 | `KVH_STRATA_URL` [`http://127.0.0.1:18080`] | Strata through the tunnel |
-| `KVH_STRATA_MODEL` [`qwen3.8-flash-next-unsloth-ud-iq4_xs`], `KVH_STRATA_ENGINE` [`0.1.40`] | what Strata's `/v1/status` must report before a handoff |
+| `KVH_STRATA_MODEL` [`qwen3.8-flash-next-unsloth-ud-iq4_xs`], `KVH_STRATA_ENGINES` [`0.1.40,0.1.41`] | the model Strata's `/v1/status` must report, and the engine versions (comma-separated) the converter is validated for |
 | `KVH_SUSHI_URL` [`http://127.0.0.1:8000`] | Sushi |
 | `KVH_PROXY_PORT` [`8002`] | the proxy's port (loopback only) |
 | `KVH_SUSHI_MODEL_DIR` [`~/.sushi/models/Qwen3.8-Flash-Next-Sushi-4bpw`] | tokenizer and chat template used for the render |

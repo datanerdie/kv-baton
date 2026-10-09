@@ -539,7 +539,7 @@ def test_small_requests_are_not_held_while_a_handoff_runs(setup):
     ("1.3.0", {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40"}, "Sushi version '1.3.0'"),
     (None, {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40"}, "Sushi version None"),
     ("1.2.0", {"model": "qwen3.8-flash-next-other", "engine": "0.1.40"}, "Strata serves"),
-    ("1.2.0", {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.41"}, "Strata serves"),
+    ("1.2.0", {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.42"}, "Strata serves"),
 ])
 def test_identity_mismatch_passes_through(setup, tmp_path, version, status, reason):
     up, start = setup
@@ -560,6 +560,17 @@ def test_identity_ok_hands_off_and_stamps_the_entry(setup, tmp_path):
     st = json.loads(stamps[0].read_text())
     assert st["sushi_version"] == "1.2.0" and st["strata"] == {"model": status["model"], "engine": "0.1.40"}
     assert st["prompt_tokens"] == 500 and st["has_tools"] is False and "converter" in st
+
+
+@pytest.mark.parametrize("engine", ["0.1.40", "0.1.41"])
+def test_every_validated_strata_engine_hands_off(setup, tmp_path, engine):
+    up, start = setup
+    status = {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": engine, "loaded": True}
+    log = []; url, _ = start(500, steps(log, 500), sushi_version_fn=lambda: "1.2.0", strata_status_fn=lambda: status)
+    post(url, BIG)
+    assert log[-1] == "restart"
+    st = json.loads(next((tmp_path / "root").glob("e*/kvh.json")).read_text())
+    assert st["strata"] == {"model": status["model"], "engine": engine}
 
 
 def test_a_handoff_that_finished_during_the_wait_is_not_repeated(setup, tmp_path, monkeypatch):
