@@ -166,3 +166,18 @@ Measured live through the gateway (fresh documents, greedy, thinking off), v0.1.
 | 400K (v0.1.40.1 from the 512K run above) | 210 s | 204.1 s | -2.9% |
 
 First token at 100K 49.1 -> 47.7 s, at 400K 226 -> 218.9 s. Needles 1/1 at 100K and 4/4 at 400K on both; a tools request (20.7K tokens, the tool was called) and a thinking request (20.4K, medium effort, correct answer) handed off and restored. v0.1.41's new default, part of the experts of prompt chunks under 1,024 tokens computed on the idle CPU ("mean KL ~0.004"; `STRATA_PREFILL_CPU_SHARE=0` turns it off), was on; nothing differed in these checks.
+
+## Handoffs on long agent conversations (2026-10-10)
+
+A 2 h 11 min agent session (346 turns, context 16K to 357K, thinking off) made 10 handoffs at the old rule (5,000 new tokens). The 2 cold ones (15.8K tokens, nothing cached) were ~20 s faster than Sushi alone. All 8 on the long conversation Sushi already held (5.1K-8.9K new tokens on 88K-330K cached, 2-6% of the prompt) were 10-50 s slower, about 2.4 min in all:
+
+| Prompt | New tokens | Handoff | Sushi alone (est.) |
+|---:|---:|---:|---:|
+| 93,664 | 5,138 | 40 s (Strata prefill 32.9 s) | 9 s |
+| 222,697 | 8,923 | 44 s | 16 s |
+| 308,450 | 6,616 | 62 s (Strata prefill 47.6 s) | 12 s |
+| 330,102 | 5,677 | 23 s (Strata prefill 4.7 s) | 10 s |
+
+Two costs grow with the whole prompt, not with the new tokens: Strata prefills from scratch whatever it does not hold, and save + stream + import took ~16 s at 330K. Sushi's prefill of an increment stayed at ~500-640 t/s at every context length. Decode over the session ran 45.2 t/s under 50K and 42.2 t/s at 300-400K.
+
+The proxy now also requires the new tokens to be at least 25% of the prompt (`KVH_AUTO_MIN_NEW_FRACTION`); with Strata cold, a handoff costs about a third of a local prefill of the whole prompt. At that rule all 8 losing handoffs stay on Sushi and both winning ones still hand off. Live through the gateway afterwards: a fresh 32,807-token prompt handed off (16.3 s), a 6,315-token follow-up (16%) stayed on Sushi (9.8 s), a 45,956-token follow-up (54%) handed off (27.3 s, Sushi restored 85,033 tokens).

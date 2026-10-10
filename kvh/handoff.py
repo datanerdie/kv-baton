@@ -39,6 +39,9 @@ class Config:
     cache_root: str
     incoming: str
     min_new_tokens: int = 30000
+    # Also require new tokens >= this share of the prompt (0 = off). Strata may lack the prefix, and save + stream +
+    # import grow with the whole context, so a few K new tokens on a long cached conversation are faster on Sushi.
+    min_new_fraction: float = 0.0
     strata_max_ctx: int = 131072
     idle_wait_s: float = 300.0
 
@@ -64,6 +67,8 @@ def decide(n_prompt, restorable, cfg):
         return False, f"prompt {n_prompt} >= Strata's {cfg.strata_max_ctx}"
     if new < cfg.min_new_tokens:
         return False, f"only {new} new tokens (< {cfg.min_new_tokens})"
+    if new < cfg.min_new_fraction * n_prompt:
+        return False, f"only {new} new tokens ({new / n_prompt:.0%} of the prompt < {cfg.min_new_fraction:.0%})"
     return True, f"{new} new tokens"
 
 

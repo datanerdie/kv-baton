@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 from array import array
@@ -23,6 +24,16 @@ def cfg(tmp_path):
 ])
 def test_decide(tmp_path, n, restorable, want):
     assert handoff.decide(n, restorable, cfg(tmp_path))[0] is want
+
+
+@pytest.mark.parametrize("n,restorable,want", [
+    (900, 0, True),      # cold: all new
+    (900, 600, True),    # 300 new = 33% >= 25%
+    (900, 700, False),   # 200 new >= 100 but 22% < 25%
+])
+def test_decide_fraction(tmp_path, n, restorable, want):
+    c = dataclasses.replace(cfg(tmp_path), min_new_fraction=0.25)
+    assert handoff.decide(n, restorable, c)[0] is want
 
 
 def fake_steps(log, prompt_ids, fail_at=None, restart=None):

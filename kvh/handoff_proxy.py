@@ -44,6 +44,12 @@ def log(msg):
 # ~2.9 s plus Strata's prefill at ~2,300 t/s against Sushi's ~700 t/s, so it breaks even near 3,000 new tokens.
 AUTO_HANDOFF = True
 AUTO_MIN_NEW_TOKENS = int(os.environ.get("KVH_AUTO_MIN_NEW_TOKENS", "5000"))
+# And new tokens must be >= this share of the prompt (2026-10-10, a 2 h agent session to 357K): the 2 cold handoffs
+# (15.8K, nothing cached) won ~20 s each, but all 8 on a long cached conversation (5-9K new on 88-330K cached, 2-6% of
+# the prompt) lost 10-50 s: Strata re-prefilled far more than the new tokens when it lacked the prefix (93K prompt:
+# 32.9 s) and save + stream + import took ~16 s at 330K, against Sushi's flat ~550 t/s on the increment (5K: ~9 s).
+# With Strata cold, a handoff costs about a third of a local prefill of the whole prompt, hence 25%.
+AUTO_MIN_NEW_FRACTION = float(os.environ.get("KVH_AUTO_MIN_NEW_FRACTION", "0.25"))
 # Normal-alias requests that pass through are logged from this size on (prompt tokens; for a request the renderer does
 # not model, its body at ~4 bytes a token), to see what the threshold and the unmodelled cases cost (2026-10-08).
 LOG_SKIPS_FROM_TOKENS = int(os.environ.get("KVH_LOG_SKIPS_FROM_TOKENS", "2000"))
@@ -443,7 +449,8 @@ def main():
     except Exception as e:
         log(f"Renderer failed ({type(e).__name__}: {e}); running pass-through only, no handoffs")
         renderer = None
-    cfg = handoff.Config(cache_root=root, incoming=incoming, min_new_tokens=AUTO_MIN_NEW_TOKENS)   # bigdoc alias: same
+    cfg = handoff.Config(cache_root=root, incoming=incoming, min_new_tokens=AUTO_MIN_NEW_TOKENS,   # bigdoc alias: same
+                         min_new_fraction=0.0 if force_all else AUTO_MIN_NEW_FRACTION)
     if os.environ.get("KVH_MIN_NEW_TOKENS"):
         cfg = dataclasses.replace(cfg, min_new_tokens=int(os.environ["KVH_MIN_NEW_TOKENS"]))
     srv = make_server(port, handoff.SUSHI_URL, renderer, cfg, handoff.real_steps(),
@@ -452,7 +459,7 @@ def main():
                       strata_status_fn=strata_status)
     log(f"proxy up on 127.0.0.1:{port}, cache root {root}, Sushi {sushi_version(sushi_log)}" +
         (f" - TEST INSTANCE: every chat request is a candidate, min_new_tokens {cfg.min_new_tokens}" if force_all else
-         f", automatic handoff at {AUTO_MIN_NEW_TOKENS} new tokens" if AUTO_HANDOFF else ""))
+         f", automatic handoff at {AUTO_MIN_NEW_TOKENS} new tokens and {cfg.min_new_fraction:.0%} of the prompt" if AUTO_HANDOFF else ""))
     srv.serve_forever()
 
 

@@ -38,7 +38,7 @@ Measured on the setup below with Sushi 1.2.0 and Strata v0.1.40.1 (Sushi 1.2.1 r
 | ~100K | ~49 s | ~153 s | 3.1x |
 | ~400K | 226 s | 631 s | 2.8x |
 
-A handoff costs about 2.9 s of fixed overhead plus Strata's prefill, so it breaks even near 3,000 new tokens; the proxy hands off from 5,000. Short chats are relayed straight to the Mac (first token ~0.3 s), and follow-up questions about a document already in the Mac's cache answer in 0.3–1.9 s.
+A handoff costs about 2.9 s of fixed overhead plus Strata's prefill, so it breaks even near 3,000 new tokens; the proxy hands off from 5,000, and only when the new tokens are also at least 25% of the prompt (on a long conversation the Mac is already holding, a few thousand new tokens are faster on the Mac, see RESULTS.md). Short chats are relayed straight to the Mac (first token ~0.3 s), and follow-up questions about a document already in the Mac's cache answer in 0.3–1.9 s.
 
 **Prefill throughput** (tokens per second)
 
@@ -69,12 +69,12 @@ The quality-suite run handed off all 752 requests (665 were decoded from Strata'
 ```
 client --> LiteLLM :4001 --> handoff proxy :8002 --> Sushi :8000 (Mac)   <- every request ends here
                                    |
-                                   | >= 5,000 tokens Sushi has not cached
+                                   | >= 5,000 tokens Sushi has not cached, >= 25% of the prompt
                                    v
                      ssh -L 18080 --> Strata :8080 (GPU box)
 ```
 
-1. The proxy renders the request with the model's chat template, resolving thinking and effort the way Sushi does, and checks the result against Sushi's own `/tokenize`. It works out how much of the prompt Sushi already has in its disk prefix cache. With fewer than 5,000 new tokens, or anything it cannot reproduce exactly (images, a forced `tool_choice`, `response_format`, a render that differs from Sushi's tokens), it relays the request to Sushi untouched.
+1. The proxy renders the request with the model's chat template, resolving thinking and effort the way Sushi does, and checks the result against Sushi's own `/tokenize`. It works out how much of the prompt Sushi already has in its disk prefix cache. With fewer than 5,000 new tokens or new tokens under 25% of the prompt, or anything it cannot reproduce exactly (images, a forced `tool_choice`, `response_format`, a render that differs from Sushi's tokens), it relays the request to Sushi untouched.
 2. It checks that Sushi runs a version the render was validated against and that Strata serves the expected model, engine and context.
 3. It sends Strata the checked token ids as `kvh_prompt_ids` with `max_tokens: 1` (prefill only; a local Strata patch makes Strata prefill exactly those ids instead of rendering the template itself) and asks Strata to save its slot to a session file.
 4. `ssh <gpu-host> cat <session>` is piped into `strata_to_sushi.py -`, which reads the stream on one thread while it converts on another and writes a Sushi cache entry:
@@ -129,6 +129,7 @@ Point clients (or a gateway, see `examples/litellm.yaml`) at `http://127.0.0.1:8
 | variable | meaning |
 |---|---|
 | `KVH_AUTO_MIN_NEW_TOKENS` [`5000`] | hand off from this many tokens Sushi has not cached (break-even is ~3,000) |
+| `KVH_AUTO_MIN_NEW_FRACTION` [`0.25`] | and only when those new tokens are at least this share of the prompt (`0` turns the check off) |
 | `KVH_STRATA_HOST` [`gpu-box`] | ssh host of the GPU box; sessions are read from `~/kvh/sessions` there |
 | `KVH_STRATA_URL` [`http://127.0.0.1:18080`] | Strata through the tunnel |
 | `KVH_STRATA_MODEL` [`qwen3.8-flash-next-unsloth-ud-iq4_xs`], `KVH_STRATA_ENGINES` [`0.1.40,0.1.41`] | the model Strata's `/v1/status` must report, and the engine versions (comma-separated) the converter is validated for |
