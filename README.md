@@ -117,7 +117,7 @@ This was built for one specific pair of machines; expect to adapt paths.
 **Mac.** Install Sushi 1.2.1 (`brew install beamivalice/tap/sushi`, or unpack the release tarball and point `SUSHI_REL_LIB` at its `lib`) with the `Qwen3.8-Flash-Next-Sushi-4bpw` pack, then build the patched server with `kvh/build-sushi-kvh.sh` (`SUSHI_VERSION` picks the release, default 1.2.1) and run that binary instead of Homebrew's. Do not start it with `--think`: it changes the thinking defaults the proxy copies, so the proxy then hands nothing off. Stock Sushi also works: the proxy then restarts Sushi to make it load the entry (~10 s more, and other requests wait during the restart). Then:
 
 ```sh
-uv run --with pytest --with transformers --with jinja2 pytest kvh/tests -q      # 173 passed, 2 skipped
+uv run --with pytest --with transformers --with jinja2 pytest kvh/tests -q      # 181 passed, 2 skipped
 cp kvh/launchd/*.plist ~/Library/LaunchAgents/      # after editing paths and the ssh host
 launchctl load ~/Library/LaunchAgents/local.kvh-tunnel.plist ~/Library/LaunchAgents/local.kvh-proxy.plist
 ```
@@ -136,6 +136,7 @@ Point clients (or a gateway, see `examples/litellm.yaml`) at `http://127.0.0.1:8
 | `KVH_SUSHI_URL` [`http://127.0.0.1:8000`] | Sushi |
 | `KVH_PROXY_PORT` [`8002`] | the proxy's port (loopback only) |
 | `KVH_SUSHI_MODEL_DIR` [`~/.sushi/models/Qwen3.8-Flash-Next-Sushi-4bpw`] | tokenizer and chat template used for the render |
+| `KVH_SUSHI_PACKS` [empty] | more Sushi packs that may receive handoffs, comma-separated (by the name Sushi's `/v1/models` reports): packs built on Sushi-4bpw's trunk with other experts, so tokenizer, template and cache layout match. Any other pack is passed through without a handoff |
 | `KVH_SUSHI_CACHE_ROOT` [`~/.sushi/kv-cache/526f67face43a3d8`] | Sushi's cache folder for this pack (fallback when the log does not name it) |
 | `KVH_SUSHI_LOG` [`../sushi-server.log`] | Sushi's log, read for its version and the `[disk-cache] scanned ... at <dir>` line |
 | `KVH_SUSHI_RESTART` [`~/.local/bin/sushi-restart`] | a command that restarts Sushi (needed only with stock Sushi) |

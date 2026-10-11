@@ -29,6 +29,11 @@ BIGDOC_PREFIX = "qwen38-flash-bigdoc"
 # A handoff restarts Sushi, so it is only done while the production Sushi pack is what is running (never on another
 # engine, never to start a server the user stopped on purpose).
 EXPECTED_SUSHI_MODEL = "Qwen3.8-Flash-Next-Sushi-4bpw"
+# Packs that may be production: Sushi-4bpw, plus the comma-separated pack names in KVH_SUSHI_PACKS -- a pack built on
+# Sushi-4bpw's trunk with other experts (same tokenizer, template and cache layout).
+# Each pack has its own cache folder, which find_cache_root reads from Sushi's log.
+EXTRA_SUSHI_PACKS = os.environ.get("KVH_SUSHI_PACKS", "")
+PRODUCTION_SUSHI_PACKS = (EXPECTED_SUSHI_MODEL,) + tuple(p.strip() for p in EXTRA_SUSHI_PACKS.split(",") if p.strip())
 EXPECTED_SUSHI_CTX = 1048576
 LOG = os.path.expanduser(os.environ.get("KVH_PROXY_LOG") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "handoff_proxy.log"))
 _log_lock = threading.Lock()
@@ -271,8 +276,9 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 got = (m.get("id"), m.get("context_length"))
             except Exception as e:
                 return False, f"/v1/models failed ({type(e).__name__}: {e})"
-            if got != (EXPECTED_SUSHI_MODEL, EXPECTED_SUSHI_CTX):
-                return False, f"upstream is {got[0]!r} ctx {got[1]!r}, not {EXPECTED_SUSHI_MODEL!r} ctx {EXPECTED_SUSHI_CTX}"
+            if got[0] not in PRODUCTION_SUSHI_PACKS or got[1] != EXPECTED_SUSHI_CTX:
+                return False, (f"upstream is {got[0]!r} ctx {got[1]!r}, not a production Sushi pack "
+                               f"{PRODUCTION_SUSHI_PACKS} at ctx {EXPECTED_SUSHI_CTX}")
             effort = m.get("default_reasoning_effort")
             if effort not in (None, "off"):    # sushi --think X changes the defaults render.py follows (1.2.0)
                 return False, f"Sushi's default reasoning effort is {effort!r} (--think), which the render does not model"

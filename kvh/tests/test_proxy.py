@@ -353,7 +353,8 @@ def _models(model, ctx):
 
 
 @pytest.mark.parametrize("models, status, reason", [
-    (_models("Qwen3.8-Flash-Next-other", 1048576), 200, "not 'Qwen3.8-Flash-Next-Sushi-4bpw'"),
+    (_models("Qwen3.8-Flash-Next-other", 1048576), 200, "not a production Sushi pack"),
+    (_models("Qwen3.8-Flash-Next-Sushi-unlisted", 1048576), 200, "not a production Sushi pack"),
     (_models("Qwen3.8-Flash-Next-Sushi-4bpw", 262144), 200, "ctx 262144"),
     ({"error": "nope"}, 500, "/v1/models failed"),
     ({"data": []}, 200, "/v1/models failed"),
@@ -379,12 +380,45 @@ def test_bigdoc_hands_off_when_models_match(setup, effort):
     assert log == ["prefill", "save", "dump", "convert", "restart"]
 
 
+@pytest.mark.parametrize("pack", ["Qwen3.8-Flash-Next-Sushi-4bpw", "Qwen3.8-Flash-Next-Sushi-custom"])
+def test_bigdoc_hands_off_to_every_production_pack(setup, pack, monkeypatch):
+    """Sushi-4bpw always; a pack on its trunk with other experts when KVH_SUSHI_PACKS names it."""
+    monkeypatch.setattr(handoff_proxy, "PRODUCTION_SUSHI_PACKS",
+                        ("Qwen3.8-Flash-Next-Sushi-4bpw", "Qwen3.8-Flash-Next-Sushi-custom"))
+    up, start = setup
+    up.models = _models(pack, 1048576)
+    log = []; url, _ = start(500, steps(log, 500))
+    post(url, BIG)
+    assert log == ["prefill", "save", "dump", "convert", "restart"]
+
+
 @pytest.mark.parametrize("extra", [{"reasoning_effort": "high"}, {"reasoning": {"effort": "high"}}])
 def test_bigdoc_top_level_reasoning_passes_through(setup, extra):
     up, start = setup
     log = []; url, _ = start(500, steps(log, 500))
     post(url, dict(BIG, **extra))
     assert log == [] and len(up.bodies) == 1
+
+
+def test_bigdoc_passes_through_an_unlisted_pack(setup, monkeypatch):
+    monkeypatch.setattr(handoff_proxy, "PRODUCTION_SUSHI_PACKS", ("Qwen3.8-Flash-Next-Sushi-4bpw",))
+    up, start = setup
+    up.models = _models("Qwen3.8-Flash-Next-Sushi-custom", 1048576)
+    log = []; url, _ = start(500, steps(log, 500))
+    post(url, BIG)
+    assert log == [] and len(up.bodies) == 1
+
+
+def test_extra_packs_come_from_the_environment(monkeypatch):
+    import importlib
+    monkeypatch.setenv("KVH_SUSHI_PACKS", " pack-a, ,pack-b ")
+    try:
+        assert importlib.reload(handoff_proxy).PRODUCTION_SUSHI_PACKS == ("Qwen3.8-Flash-Next-Sushi-4bpw", "pack-a", "pack-b")
+        monkeypatch.setenv("KVH_SUSHI_PACKS", "")
+        assert importlib.reload(handoff_proxy).PRODUCTION_SUSHI_PACKS == ("Qwen3.8-Flash-Next-Sushi-4bpw",)
+    finally:
+        monkeypatch.delenv("KVH_SUSHI_PACKS")
+        importlib.reload(handoff_proxy)
 
 
 def test_renderer_none_is_pass_through_only(setup):
