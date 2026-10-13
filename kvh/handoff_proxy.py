@@ -59,7 +59,9 @@ AUTO_MIN_NEW_FRACTION = float(os.environ.get("KVH_AUTO_MIN_NEW_FRACTION", "0.25"
 # not model, its body at ~4 bytes a token), to see what the threshold and the unmodelled cases cost (2026-10-08).
 LOG_SKIPS_FROM_TOKENS = int(os.environ.get("KVH_LOG_SKIPS_FROM_TOKENS", "2000"))
 # render.py copies Sushi's rendering rules; they were checked token for token on these versions only.
-VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1")
+# 1.2.2 (2026-10-13): chat-render source unchanged for Qwen (defaultEnableThinking lost its has_tools argument, which
+# only the removed muse_glimmer/gpt_oss arms read); cache format unchanged.
+VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2")
 # The converter assumes this Strata model (UD-IQ4_XS, YaRN 4, int8 KV) and an engine whose session file it reads
 # (STRSESS v1). 0.1.41 checked 2026-10-08: the session format only gained the opt-in pin=N / strata_prefix.
 STRATA_MODEL = os.environ.get("KVH_STRATA_MODEL", "qwen3.8-flash-next-unsloth-ud-iq4_xs")
