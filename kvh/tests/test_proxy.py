@@ -607,6 +607,17 @@ def test_every_validated_strata_engine_hands_off(setup, tmp_path, engine):
     assert st["strata"] == {"model": status["model"], "engine": engine}
 
 
+@pytest.mark.parametrize("model", ["qwen3.8-flash-next-unsloth-ud-iq4_xs", "qwen3.8-flash-next-unsloth-ud-q4_k_xl"])
+def test_every_validated_strata_model_hands_off(setup, tmp_path, model):
+    up, start = setup
+    status = {"model": model, "engine": "0.1.41", "loaded": True}
+    log = []; url, _ = start(500, steps(log, 500), sushi_version_fn=lambda: "1.2.0", strata_status_fn=lambda: status)
+    post(url, BIG)
+    assert log[-1] == "restart"
+    st = json.loads(next((tmp_path / "root").glob("e*/kvh.json")).read_text())
+    assert st["strata"] == {"model": model, "engine": "0.1.41"}
+
+
 def test_a_handoff_that_finished_during_the_wait_is_not_repeated(setup, tmp_path, monkeypatch):
     up, start = setup
     calls = []

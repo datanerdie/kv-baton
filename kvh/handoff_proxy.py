@@ -61,10 +61,15 @@ LOG_SKIPS_FROM_TOKENS = int(os.environ.get("KVH_LOG_SKIPS_FROM_TOKENS", "2000"))
 # render.py copies Sushi's rendering rules; they were checked token for token on these versions only.
 # 1.2.2 (2026-10-13): chat-render source unchanged for Qwen (defaultEnableThinking lost its has_tools argument, which
 # only the removed muse_glimmer/gpt_oss arms read); cache format unchanged.
-VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2")
-# The converter assumes this Strata model (UD-IQ4_XS, YaRN 4, int8 KV) and an engine whose session file it reads
-# (STRSESS v1). 0.1.41 checked 2026-10-08: the session format only gained the opt-in pin=N / strata_prefix.
-STRATA_MODEL = os.environ.get("KVH_STRATA_MODEL", "qwen3.8-flash-next-unsloth-ud-iq4_xs")
+# 1.2.3 (2026-10-14): chat-render source unchanged; the GDN state is f32 (the converter writes f32, which 1.2.2 casts
+# back), and the SSD cache namespace moved, which the proxy reads from the log.
+VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3")
+# The converter assumes these Strata models (unsloth's GGUFs of the same checkpoint; YaRN 4, int8 KV: the session
+# layout does not depend on the weights' quantization) and an engine whose session file it reads (STRSESS v1).
+# 0.1.41 checked 2026-10-08: the session format only gained the opt-in pin=N / strata_prefix. UD-Q4_K_XL added
+# 2026-10-14 (run it on an engine built with -DSTRATA_MMQ_KQUANTS=ON, RESULTS.md).
+STRATA_MODELS = tuple(os.environ.get(
+    "KVH_STRATA_MODEL", "qwen3.8-flash-next-unsloth-ud-iq4_xs,qwen3.8-flash-next-unsloth-ud-q4_k_xl").split(","))
 VALIDATED_STRATA_ENGINES = tuple(os.environ.get("KVH_STRATA_ENGINES", "0.1.40,0.1.41").split(","))
 SUSHI_VERSION_RE = re.compile(r"^sushi (\d+\.\d+\.\d+)", re.M)
 
@@ -316,8 +321,8 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 except Exception as e:
                     return False, f"Strata /v1/status failed ({type(e).__name__}: {e})", None
                 got = {"model": st.get("model"), "engine": st.get("engine")}
-                if got["model"] != STRATA_MODEL or got["engine"] not in VALIDATED_STRATA_ENGINES:
-                    return False, (f"Strata serves {got}, the converter expects model {STRATA_MODEL} "
+                if got["model"] not in STRATA_MODELS or got["engine"] not in VALIDATED_STRATA_ENGINES:
+                    return False, (f"Strata serves {got}, the converter expects a model in {STRATA_MODELS} "
                                    f"on engine {VALIDATED_STRATA_ENGINES}"), None
                 stamp["strata"] = got
                 ctx = (st.get("context") or {}).get("max_positions") or st.get("cache_max_tokens")

@@ -9,7 +9,9 @@ SSM checkpoint and recomputes the tokens after it, and Strata saves only the dee
 Mapping (verified 2026-10-07 against Sushi's own entry for the same 8,262-token prompt; cosine in brackets):
   K/V        Strata int8 [page][head][page_size][256] x fp16 scale/64  ->  Sushi affine 8-bit g64 [1,2,T,64]  (0.94-0.998)
              same YaRN factor 4 on both sides (Strata --rope-scaling yarn --rope-scale 4), so no re-rotation
-  GDN ssm    Strata [k, h_s, v] fp32  ->  Sushi [h, v, k] bf16, h = (h_s % 16) * 3 + h_s // 16      (0.978-0.998)
+  GDN ssm    Strata [k, h_s, v] fp32  ->  Sushi [h, v, k] fp32, h = (h_s % 16) * 3 + h_s // 16      (0.978-0.998)
+             (bf16 up to Sushi 1.2.2; 1.2.3 stores the state f32 by default, and both cast a restored state to
+             the width they run, so f32 serves either)
              (Strata/llama.cpp pair v-head h with k-head h % 16; the reference pairs it with h // 3)
   GDN conv   Strata [channel][t] fp32 ->  Sushi [t][channel], channels q 2048 | k 2048 | v 48x128 permuted as above
   PLE        Strata [10240][9] -> Sushi l1.aux [9][10240]; l1.ple = [1, tok[p-2], tok[p-1], 0 x 6]          (0.998)
@@ -45,6 +47,10 @@ def strata_kv(dump, m, l, which, n):
 
 def bf16(a):
     return mx.array(np.ascontiguousarray(a, dtype=np.float32)).astype(mx.bfloat16)
+
+
+def f32(a):
+    return mx.array(np.ascontiguousarray(a, dtype=np.float32))
 
 
 def save(path, arrays, metadata):
@@ -113,7 +119,7 @@ class EntryWriter:
             ssm = g[i, : S * HV * S].reshape(S, HV, S).transpose(1, 2, 0)[H2S]          # [h, v, k]
             cv = g[i, S * HV * S:].reshape(CONV_CH, 3)
             cv = np.concatenate([cv[:4096], cv[4096:].reshape(HV, S, 3)[H2S].reshape(-1, 3)]).T   # [t, ch]
-            st[f"l{L}.ssm"], st[f"l{L}.conv"] = bf16(ssm[None]), bf16(cv[None])
+            st[f"l{L}.ssm"], st[f"l{L}.conv"] = f32(ssm[None]), bf16(cv[None])
         smeta = {"layers": "48", "init": ",".join(map(str, GDN_LAYERS)), "qsa_ratio": "4", "qsa_rows": str(pos)}
         sizes["ssm"] = save(os.path.join(out, f"s{pos:07d}.safetensors"), st, smeta)
 

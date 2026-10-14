@@ -7,7 +7,7 @@ Entry layout (`$HOME/.sushi/kv-cache/<fingerprint>/e<id>/`):
   meta.json   v8 manifest            tokens.bin  u32 LE token ids
   c%06d       per 1024-token chunk: l{L}.k/.v U32 [1,2,T,64] + .ks/.kb/.vs/.vb BF16 [1,2,T,4] (12 attention layers)
   s%07d       SSM checkpoint at a token position: l{i}.conv BF16 [1,3,10240], l{i}.ssm BF16 [1,48,128,128]
-              (36 GDN layers), l1.aux BF16 [1,9,10240] (PLE conv state), l1.ple U32 [9], and when pos % 4 != 0
+              (36 GDN layers; the ssm is F32 from Sushi 1.2.3), l1.aux BF16 [1,9,10240] (PLE conv state), l1.ple U32 [9], and when pos % 4 != 0
               l{L}.aux BF16 [1,pos%4,128] (the indexer's pending keys)
   qsa         l{L}.pooled BF16 [1,pos//4,128] + the same aux tensors, metadata qsa_rows = newest checkpoint
 

@@ -185,3 +185,42 @@ The proxy now also requires the new tokens to be at least 25% of the prompt (`KV
 ## Sushi 1.2.2 (2026-10-13)
 
 **Sushi 1.2.2** (kvh build, in production since 2026-10-13). The 1.2.1 import patch applies unchanged; MLX and the mlx-c pin are the same as 1.2.1. Cache format unchanged: the disk tier only lost its chunk-sharing kill switch (sharing stays on), and the prefix cache lost two other switches (defaults kept) and now sets aside an SSD entry whose restore fails instead of re-reading it on every lookup. Rendering for Qwen unchanged: the thinking default lost a `has_tools` argument that only two architectures 1.2.2 removed read; `tool_choice` "none" now also bans the call opener at decode time (a logit bias, the prompt is the same); the functions `render.py` copies (tool-definition fill, message serialisation, thinking and effort resolution) are byte-identical in the source. Every serve flag the setup uses survives 1.2.2's flag cut (it now refuses unknown flags before loading). NLL identical to 1.2.1 to the last digit (0.280633139 / 0.121696140); the KV round trip after a restart reprocessed 31 of 8,740 tokens and tool calls passed 28/28. Live ~20K handoffs through the gateway: tools, Sushi restored 20,656 cached tokens against a restore point of 20,655 and the model called the tool (12.9 s); thinking, 20,402 against 20,399, correct answer (16.1 s). The proxy now accepts 1.2.2.
+
+## Sushi 1.2.3 (2026-10-14)
+
+**Sushi 1.2.3** (kvh build, in production since 2026-10-14). Qwen's GatedDeltaNet decay gate is now f32 (a bf16 gate rounded the slowest heads to "never forget") and the recurrent state is f32 by default (`--qwen-gdn 32`; `16` keeps a bf16 state). The SSD cache namespace moved with it, so the cache starts empty. A native 1.2.3 checkpoint holds `l{i}.ssm` F32 and `l{i}.conv` / `l1.aux` BF16, so the converter now writes the ssm as f32 straight from Strata's fp32 state (1.2.2 casts a restored f32 state back to bf16, so it still reads these entries). The import patch applies with line offsets, plus one addition: Sushi logged `[disk-cache] scanned N persisted entries ... at <dir>` only when the folder already held entries, so on a fresh namespace the proxy could not find the cache root and would have staged a handoff into another folder; the patch now logs the line with 0 entries too. Rendering for Qwen unchanged. NLL short 0.280429274 (1.2.2: 0.280633139), long 0.122117151 (0.121696140), within the spread seen between kernel sets; the KV round trip after a restart reprocessed 31 of 8,740 tokens and tool calls passed 28/28. Live ~20K handoffs through the gateway: tools, Sushi restored 20,657 cached tokens against a restore point of 20,656 and the model called the tool (13.0 s); thinking, 20,400 against 20,397, correct answer (15.6 s); both imported entries hold an F32 ssm. Each checkpoint is about twice the size (58.8 -> 115.5 MB), so the same SSD cache budget holds about half as many restore points. The proxy now accepts 1.2.3.
+
+## Strata model: UD-Q4_K_XL against UD-IQ4_XS (2026-10-14)
+
+Strata v0.1.44's setup lists unsloth's UD-Q4_K_XL (93.1% same top token against Q8_0, UD-IQ4_XS 88.9%). Measured on v0.1.41 with only the model changed (same flags, `--resident-budget-gib 60`: 56.7 GiB of experts in RAM plus the GPU cache, all resident), in three arms: UD-IQ4_XS, UD-Q4_K_XL on the released engine, and UD-Q4_K_XL on an engine built with `-DSTRATA_MMQ_KQUANTS=ON` (llama.cpp's MMQ kernels multiply the Q4_K / Q5_K / Q5_1 experts directly instead of dequantizing them to FP16). The proxy accepts both model names (`KVH_STRATA_MODEL` is now a list).
+
+**Fidelity**: how closely does Sushi follow its own prefill after a handoff? Each document is sent once to Sushi alone (the reference) and once per arm through the proxy, greedy, 128 tokens, 20 top logprobs per token, the cache entries deleted between arms. While the outputs agree, both predicted each token from the same context, so KL(reference || arm) is compared position by position. 28 documents cut from six Project Gutenberg books (24 of ~32K tokens, 4 of ~100K):
+
+| against Sushi's own prefill | UD-IQ4_XS | UD-Q4_K_XL | UD-Q4_K_XL, MMQ build |
+|---|---:|---:|---:|
+| first-token KL, mean | 0.128 | 0.078 | 0.080 |
+| same-context KL, mean | 0.016 | 0.011 | 0.009 |
+| same-context KL, p99 | 0.25 | 0.13 | 0.13 |
+| top-1 token same | 95.8% | 96.7% | 96.6% |
+| agreeing tokens, mean of 128 | 22.6 | 28.3 | 27.5 |
+
+Per document (paired, exact Wilcoxon), UD-Q4_K_XL against UD-IQ4_XS: same-context KL lower on 18 of 28 documents, p = 0.019 (MMQ build: 20 of 28, p = 0.003); first-token KL 19 of 28, p = 0.056 (MMQ: 17 of 28, p = 0.025); agreeing tokens no different (p = 0.66 and 0.61). The two UD-Q4_K_XL builds do not differ (p = 0.31 and 0.83). Four three-turn conversations (~32K, then +13K and +22K tokens, each follow-up handed off, Strata reusing its own prefix) show the same: MMQ build's same-context KL lower than UD-IQ4_XS's on 11 of 12 turns (p = 0.009), agreeing tokens no different.
+
+Agreement cannot separate the models because Strata's prefill is not deterministic: the same document handed off again (from zero, cache entries deleted) moves Sushi's output by a same-context KL of 0.003-0.005 and agrees with the previous run for only ~40 of 128 tokens, on both models and within one server process as on a restarted one, while Sushi alone repeats bit for bit. Against that floor the KL to Sushi's own prefill (0.009-0.016) is mostly systematic, and that is where the models differ. (Strata's docs report identical MMQ runs with the expert cache frozen, `--adapt-every 100000`; untested here.)
+
+**Speed** (through the gateway, greedy, thinking off; 32K and 100K median of 2):
+
+| | UD-IQ4_XS | UD-Q4_K_XL | UD-Q4_K_XL, MMQ build | Sushi alone |
+|---|---:|---:|---:|---:|
+| Strata prefill 32K | 14.5 s | 27.0 s | 17.8 s | |
+| Strata prefill 100K | 42.9 s | 82.5 s | 50.8 s | |
+| Strata prefill 400K | 205 s | 351 s | 235 s | |
+| first token 32K | 17.3 s | 29.3 s | 20.4 s | ~45 s |
+| first token 100K | 47.6 s | 87.8 s | 55.4 s | ~153 s |
+| first token 400K | 223 s | 366 s | 251 s | 631 s |
+
+Follow-up turns end to end: +13K 12.7-12.9 s (UD-IQ4_XS) and 14.0-14.1 s (MMQ), +22K 16.5-17.8 s and 19.0-19.2 s, Sushi alone 22-24 s and 35-38 s. Needles 1/1 at 100K and 4/4 at 400K on all three; tools and thinking handoffs pass on both UD-Q4_K_XL builds.
+
+**Strata's own tests** on the MMQ build (`-DSTRATA_BUILD_TESTS=ON`): all pass except `ple_parity` (needs a Q2_0 GGUF fixture) and `prefill_mmq_kquant_test`, which hard-codes Q6_K while a CUDA build includes the Q6_K MMQ instance only with `-DSTRATA_Q6K_EXPERTS=ON`. UD-Q4_K_XL's experts have no Q6_K (gate/up Q4_K / Q5_K, down Q5_1 / Q8_0); built with that option the test passes, every product within relative L2 0.0034 of ggml's dequantized reference.
+
+Result: UD-Q4_K_XL is worth running only on the MMQ build, which costs 15-20% more prefill time than UD-IQ4_XS for about a third lower KL per position; whether that changes the text is below what greedy agreement can show. In production here since 2026-10-14.
