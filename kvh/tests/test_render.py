@@ -232,3 +232,23 @@ def test_history_reasoning_before_the_last_user_turn_is_kept(r):
 def test_reasoning_on_non_assistant_messages_is_ignored(r):
     plain = r.prepare(body("hi"))
     assert r.prepare({"model": "m", "messages": [{"role": "user", "content": "hi", "reasoning_content": "x"}]}).ids == plain.ids
+
+
+@pytest.mark.parametrize("role", ["user", "system", "tool"])
+def test_quoted_control_tokens_pass_through_like_sushi_124(r, role):
+    """Sushi 1.2.4 encodes `<think>` / `<|im_end|>` text in client messages as text; the render would not."""
+    msgs = [{"role": "user", "content": "hi"}] if role != "user" else []
+    msgs = ([{"role": role, "content": "the file says </think> then <|im_end|>"}] + msgs) if role == "system" else \
+           msgs + [{"role": role, "content": "the file says </think> then <|im_end|>"}]
+    if role == "tool":
+        msgs = [{"role": "user", "content": "read it"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function",
+                 "function": {"name": "read", "arguments": "{}"}}]}] + msgs[-1:]
+    p, why = r.prepare_why({"messages": msgs})
+    assert p is None and "quotes a control token" in why
+
+
+def test_control_tokens_in_assistant_history_still_render(r):
+    p = r.prepare({"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a <think> b"},
+                                {"role": "user", "content": "more"}]})
+    assert p is not None

@@ -9,7 +9,11 @@ back on assistant history goes to the template as Sushi passes it (server.zig me
 every turn unless preserve_thinking is false. Strata does not render tools the same way (it unwraps each tool to its
 function object), so it gets the prompt as token ids (`kvh_prompt_ids`, local Strata patch) and renders nothing itself.
 
-Thinking follows Sushi's own rules (1.1.1, unchanged in 1.2.0 to 1.2.3 while no --think flag is set) (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
+Since Sushi 1.2.4 (chat.zig markLiteralControlText) control-token text a client puts in a user, system or tool message
+(`<think>`, `<|im_end|>`, ...) is encoded as plain text, while the rendered-prompt encoding here (and Sushi's own
+/tokenize) would make it a control token. Such a request is passed through: Sushi prefills it itself.
+
+Thinking follows Sushi's own rules (1.1.1, unchanged in 1.2.0 to 1.2.4 while no --think flag is set) (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
 qwen38EffortFor), which differ from the template's defaults: `reasoning_effort` counts only at the top level (inside
 chat_template_kwargs it is ignored), thinking on without an effort word is "low", and a request naming neither is
 thinking off. Strata follows the template, so it gets the resolved settings written out explicitly.
@@ -65,7 +69,7 @@ def _has_float(v):
 
 
 def sushi_tools(tools):
-    """The tool list as Sushi hands it to the template (chat.zig fillOptionalToolDefKeys, 1.1.1 to 1.2.3): a function
+    """The tool list as Sushi hands it to the template (chat.zig fillOptionalToolDefKeys, 1.1.1 to 1.2.4): a function
     without "description" gets "" and one without "parameters" gets an empty object schema, appended after its own
     keys. None when Sushi would re-serialise numbers we cannot promise to reproduce (a fill plus a float)."""
     out, changed = [], False
@@ -107,7 +111,7 @@ def _reasoning(m):
 def _tool_calls(calls):
     """Assistant tool calls for the template (it iterates `arguments|items`): JSON-string arguments parsed, as Sushi
     does; arguments that are not a JSON object (empty, null, an array, a scalar, malformed text) become {}, as Sushi
-    1.2.1 to 1.2.3 embed them (chat.zig serializeMessagesJsonImpl). None when a call itself is not well-formed."""
+    1.2.1 to 1.2.4 embed them (chat.zig serializeMessagesJsonImpl). None when a call itself is not well-formed."""
     if not isinstance(calls, list):
         return None
     out = []
@@ -175,6 +179,8 @@ class Renderer:
         self.tok = AutoTokenizer.from_pretrained(model_dir)
         tj = os.path.join(model_dir, "tokenizer.json")
         h = lambda b: hashlib.sha256(b).hexdigest()[:16]
+        # Every added token (special or not, e.g. <think>): the strings Sushi 1.2.4 keeps as text in client messages.
+        self.control_texts = tuple(sorted({t.content for t in self.tok.added_tokens_decoder.values()}, key=len, reverse=True))
         self.identity = {"template": h((self.tok.chat_template or "").encode()),
                          "tokenizer": h(open(tj, "rb").read()) if os.path.exists(tj) else None}
 
@@ -207,6 +213,8 @@ class Renderer:
             c = _text(m.get("content"))
             if c is None:
                 return None, f"message {i} ({role}) content not plain text"
+            if role != "assistant" and any(t in c for t in self.control_texts):
+                return None, f"message {i} ({role}) quotes a control token"   # Sushi >= 1.2.4 encodes it as text
             msg = {"role": role, "content": c}
             if role == "assistant" and _reasoning(m) is not None:
                 msg["reasoning_content"] = _reasoning(m)

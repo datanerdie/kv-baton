@@ -63,7 +63,9 @@ LOG_SKIPS_FROM_TOKENS = int(os.environ.get("KVH_LOG_SKIPS_FROM_TOKENS", "2000"))
 # only the removed muse_glimmer/gpt_oss arms read); cache format unchanged.
 # 1.2.3 (2026-10-14): chat-render source unchanged; the GDN state is f32 (the converter writes f32, which 1.2.2 casts
 # back), and the SSD cache namespace moved, which the proxy reads from the log.
-VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3")
+# 1.2.4 (2026-10-17): render functions unchanged; client control-token text now encodes as text (render.py passes such
+# requests through); cache records without images stay v9 (v10 = media identity), fingerprint unchanged.
+VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4")
 # The converter assumes these Strata models (unsloth's GGUFs of the same checkpoint; YaRN 4, int8 KV: the session
 # layout does not depend on the weights' quantization) and an engine whose session file it reads (STRSESS v1).
 # 0.1.41 checked 2026-10-08: the session format only gained the opt-in pin=N / strata_prefix. UD-Q4_K_XL added
