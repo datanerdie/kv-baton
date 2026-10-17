@@ -143,7 +143,7 @@ Point clients (or a gateway, see `examples/litellm.yaml`) at `http://127.0.0.1:8
 | `KVH_UV` [`~/.local/bin/uv`] | uv, used to run the converter with `mlx` and `numpy` |
 | `KVH_FORCE_ALL`, `KVH_MIN_NEW_TOKENS`, `KVH_INCOMING`, `KVH_PROXY_LOG` | for a separate test instance that hands off every request |
 
-The proxy only hands off while the expected model (`Qwen3.8-Flash-Next-Sushi-4bpw` at 1,048,576 context) is what Sushi reports, and only to a Sushi version whose rendering rules it was checked against (1.1.1, 1.2.0, 1.2.1, 1.2.2, 1.2.3); anything else is passed through.
+The proxy only hands off while the expected model (`Qwen3.8-Flash-Next-Sushi-4bpw` at 1,048,576 context) is what Sushi reports, and only to a Sushi version whose rendering rules it was checked against (1.1.1, 1.2.0, 1.2.1, 1.2.2, 1.2.3, 1.2.4); anything else is passed through. Before each handoff it also asks Strata a ~600-token question with a known answer (which number follows 157 in a list of 1 to 200); a wrong answer or an error sends the request to Sushi alone, and a pass is trusted for 10 minutes. This catches a GPU box whose GPUs came back damaged from a suspend/resume: Strata then still answers short prompts and reports a healthy `/v1/status`, but returns garbage (`!!!!`) from a few hundred tokens up until the box is rebooted.
 
 ## Limits
 

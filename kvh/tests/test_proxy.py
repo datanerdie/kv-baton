@@ -656,3 +656,37 @@ def test_strata_context_comes_from_its_status(setup, tmp_path, ctx, handed_off):
     assert (log[:1] == ["prefill"]) is handed_off
     if not handed_off:
         assert "prompt 200000 >= Strata's context 131072" in (tmp_path / "handoff_proxy-test.log").read_text()
+
+
+@pytest.mark.parametrize("sane, reason", [
+    (lambda: (False, "!!!!!!!!"), "sanity check"),
+    (lambda: (_ for _ in ()).throw(OSError("refused")), "refused"),
+])
+def test_insane_strata_passes_through(setup, tmp_path, sane, reason):
+    up, start = setup
+    status = {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40", "loaded": True}
+    log = []; url, _ = start(500, steps(log, 500), sushi_version_fn=lambda: "1.2.0", strata_status_fn=lambda: status,
+                             strata_sane_fn=sane)
+    out = post(url, BIG)
+    assert out["choices"][0]["message"]["content"] == "hi" and log == [] and len(up.bodies) == 1
+    assert reason in (tmp_path / "handoff_proxy-test.log").read_text()
+
+
+def test_sane_strata_hands_off(setup):
+    up, start = setup
+    status = {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40", "loaded": True}
+    log = []; url, _ = start(500, steps(log, 500), sushi_version_fn=lambda: "1.2.0", strata_status_fn=lambda: status,
+                             strata_sane_fn=lambda: (True, "158"))
+    post(url, BIG)
+    assert log == ["prefill", "save", "dump", "convert", "restart"]
+
+
+def test_sanity_cache_trusts_a_pass_for_ttl_and_never_a_failure():
+    now, calls, results = [0.0], [], [(True, "158"), (False, "!!"), (False, "!!"), (True, "158")]
+    def check():
+        calls.append(now[0]); return results[len(calls) - 1]
+    c = handoff_proxy.SanityCache(check, ttl_s=600, clock=lambda: now[0])
+    assert c() == (True, "158") and c() == (True, "cached") and len(calls) == 1
+    now[0] = 601
+    assert c()[0] is False and c()[0] is False and len(calls) == 3       # failures are re-checked every time
+    assert c() == (True, "158") and len(calls) == 4

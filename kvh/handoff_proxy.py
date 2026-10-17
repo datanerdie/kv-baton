@@ -91,6 +91,41 @@ def strata_status(url=handoff.STRATA_URL):
         return json.load(r)
 
 
+# Strata sanity check before a handoff (2026-10-16): after a suspend/resume of the GPU box, Strata answered short
+# prompts but returned "!!!!" from ~300 tokens up (only a reboot cleared it), and /v1/status still looked fine. So
+# before handing off, Strata must answer a ~600-token question correctly; a pass is trusted for SANE_TTL_S, a failure
+# never is.
+SANE_PROMPT = ("Here is a list of numbers: " + ", ".join(str(i) for i in range(1, 201)) +
+               ".\n\nWhich number comes right after 157 in the list? Reply with the number only.")
+SANE_ANSWER = "158"
+SANE_TTL_S = 600.0
+
+
+def strata_sane(url=handoff.STRATA_URL):
+    """(ok, detail): Strata answers SANE_PROMPT with SANE_ANSWER (greedy, thinking off)."""
+    body = {"model": "x", "messages": [{"role": "user", "content": SANE_PROMPT}], "max_tokens": 8, "temperature": 0,
+            "chat_template_kwargs": {"enable_thinking": False}}
+    req = urllib.request.Request(url + "/v1/chat/completions", json.dumps(body).encode(),
+                                 {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        text = (json.load(r)["choices"][0]["message"].get("content") or "").strip()
+    return SANE_ANSWER in text, text[:40]
+
+
+class SanityCache:
+    """Calls check() at most once per ttl_s while it passes; a failure is re-checked on the next call."""
+
+    def __init__(self, check, ttl_s=SANE_TTL_S, clock=time.monotonic):
+        self.check, self.ttl_s, self.clock, self.ok_at = check, ttl_s, clock, None
+
+    def __call__(self):
+        if self.ok_at is not None and self.clock() - self.ok_at < self.ttl_s:
+            return True, "cached"
+        ok, detail = self.check()
+        self.ok_at = self.clock() if ok else None
+        return ok, detail
+
+
 def file_sha(path):
     try:
         with open(path, "rb") as f:
@@ -137,12 +172,13 @@ def clean_incoming(incoming):
 
 def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_handoff=THINK_HANDOFF, cache_root_fn=None,
                 force_all=False, auto_handoff=False, auto_min_new_tokens=AUTO_MIN_NEW_TOKENS, sushi_version_fn=None,
-                strata_status_fn=None):
+                strata_status_fn=None, strata_sane_fn=None):
     """renderer None: pass-through only (no handoffs). cache_root_fn: returns the current cache root, per request.
     force_all (test instances only): every chat completion is a candidate at cfg.min_new_tokens, whatever its model.
     auto_handoff: chat completions on other models than qwen38-flash-bigdoc* are candidates at auto_min_new_tokens;
     below it they are relayed without a log line, a cache lookup or any other work beyond the render.
-    sushi_version_fn / strata_status_fn: identity checks before a handoff (None skips that check, for tests)."""
+    sushi_version_fn / strata_status_fn: identity checks before a handoff (None skips that check, for tests).
+    strata_sane_fn: () -> (ok, detail), Strata answers a known question correctly (None skips it, for tests)."""
     gate, one_handoff = Gate(), threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -330,6 +366,13 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
                 ctx = (st.get("context") or {}).get("max_positions") or st.get("cache_max_tokens")
                 if isinstance(ctx, int) and ctx > 0:
                     stamp["strata_ctx"] = ctx                # what Strata was started with (--max-context)
+            if strata_sane_fn is not None:
+                try:
+                    ok, detail = strata_sane_fn()
+                except Exception as e:
+                    ok, detail = False, f"{type(e).__name__}: {e}"
+                if not ok:
+                    return False, f"Strata failed the sanity check (expected {SANE_ANSWER}, got {detail!r})", None
             return True, "", stamp
 
         def _bigdoc(self, raw, body, streaming, threshold, label):
@@ -471,7 +514,7 @@ def main():
     srv = make_server(port, handoff.SUSHI_URL, renderer, cfg, handoff.real_steps(),
                       cache_root_fn=lambda: find_cache_root(sushi_log, default_root), force_all=force_all,
                       auto_handoff=AUTO_HANDOFF and not force_all, sushi_version_fn=lambda: sushi_version(sushi_log),
-                      strata_status_fn=strata_status)
+                      strata_status_fn=strata_status, strata_sane_fn=SanityCache(strata_sane))
     log(f"proxy up on 127.0.0.1:{port}, cache root {root}, Sushi {sushi_version(sushi_log)}" +
         (f" - TEST INSTANCE: every chat request is a candidate, min_new_tokens {cfg.min_new_tokens}" if force_all else
          f", automatic handoff at {AUTO_MIN_NEW_TOKENS} new tokens and {cfg.min_new_fraction:.0%} of the prompt" if AUTO_HANDOFF else ""))
