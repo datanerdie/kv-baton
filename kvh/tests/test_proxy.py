@@ -392,7 +392,7 @@ def test_bigdoc_hands_off_to_every_production_pack(setup, pack, monkeypatch):
     assert log == ["prefill", "save", "dump", "convert", "restart"]
 
 
-@pytest.mark.parametrize("extra", [{"reasoning_effort": "high"}, {"reasoning": {"effort": "high"}}])
+@pytest.mark.parametrize("extra", [{"reasoning_effort": "minimal"}, {"reasoning": {"effort": "high"}}])
 def test_bigdoc_top_level_reasoning_passes_through(setup, extra):
     up, start = setup
     log = []; url, _ = start(500, steps(log, 500))
@@ -570,7 +570,7 @@ def test_small_requests_are_not_held_while_a_handoff_runs(setup):
 
 
 @pytest.mark.parametrize("version, status, reason", [
-    ("1.3.0", {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40"}, "Sushi version '1.3.0'"),
+    ("9.9.9", {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40"}, "Sushi version '9.9.9'"),
     (None, {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.40"}, "Sushi version None"),
     ("1.2.0", {"model": "qwen3.8-flash-next-other", "engine": "0.1.40"}, "Strata serves"),
     ("1.2.0", {"model": "qwen3.8-flash-next-unsloth-ud-iq4_xs", "engine": "0.1.42"}, "Strata serves"),

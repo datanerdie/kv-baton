@@ -65,7 +65,9 @@ LOG_SKIPS_FROM_TOKENS = int(os.environ.get("KVH_LOG_SKIPS_FROM_TOKENS", "2000"))
 # back), and the SSD cache namespace moved, which the proxy reads from the log.
 # 1.2.4 (2026-10-17): render functions unchanged; client control-token text now encodes as text (render.py passes such
 # requests through); cache records without images stay v9 (v10 = media identity), fingerprint unchanged.
-VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4")
+# 1.3.0 (2026-10-22): chat.zig unchanged; "high"/"max" now fold to xhigh (render.py EFFORT_FOLDS); kv8 cache records
+# unchanged (kv6 added as its own width).
+VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.3.0")
 # The converter assumes these Strata models (unsloth's GGUFs of the same checkpoint; YaRN 4, int8 KV: the session
 # layout does not depend on the weights' quantization) and an engine whose session file it reads (STRSESS v1).
 # 0.1.41 checked 2026-10-08: the session format only gained the opt-in pin=N / strata_prefix. UD-Q4_K_XL added

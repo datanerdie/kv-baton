@@ -13,7 +13,8 @@ Since Sushi 1.2.4 (chat.zig markLiteralControlText) control-token text a client 
 (`<think>`, `<|im_end|>`, ...) is encoded as plain text, while the rendered-prompt encoding here (and Sushi's own
 /tokenize) would make it a control token. Such a request is passed through: Sushi prefills it itself.
 
-Thinking follows Sushi's own rules (1.1.1, unchanged in 1.2.0 to 1.2.4 while no --think flag is set) (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
+Thinking follows Sushi's own rules (1.1.1, unchanged in 1.2.0 to 1.3.0 while no --think flag is set, except 1.3.0's
+high/max -> xhigh fold) (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
 qwen38EffortFor), which differ from the template's defaults: `reasoning_effort` counts only at the top level (inside
 chat_template_kwargs it is ignored), thinking on without an effort word is "low", and a request naming neither is
 thinking off. Strata follows the template, so it gets the resolved settings written out explicitly.
@@ -31,6 +32,9 @@ ARCH_DEFAULT_THINKING = False
 # Sushi's effort table for qwen4_exp (model.zig qwen4_exp_efforts); "none" is an alias of off. Other words get a 400
 # (since 1.2.0 also "minimal", which 1.1.1 took as low).
 EFFORT_ARMS = ("off", "low", "medium", "xhigh")
+# Since 1.3.0 (model.zig selectEffortPick) Sushi serves the words it lacks at the nearest arm instead of a 400:
+# "high" and "max" render as xhigh. (On a 1.2.x rollback Sushi still refuses them after the handoff.)
+EFFORT_FOLDS = {"high": "xhigh", "max": "xhigh"}
 # Request fields the Strata copy must not carry: Sushi's resolution of them is written into chat_template_kwargs.
 THINKING_FIELDS = ("enable_thinking", "reasoning_effort")
 
@@ -151,7 +155,7 @@ def sushi_template_kwargs(body):
     if not isinstance(word, str):
         word, effort_on = None, None
     else:
-        arm = "off" if word == "none" else word
+        arm = "off" if word == "none" else EFFORT_FOLDS.get(word, word)
         if arm not in EFFORT_ARMS:
             return None                         # Sushi answers 400
         effort_on = arm != "off"
@@ -165,6 +169,7 @@ def sushi_template_kwargs(body):
         effort = "low"
     elif word == "medium":
         effort = "medium"
+    # "high" and "max" fall through to xhigh with the rest (EFFORT_FOLDS)
     else:
         effort = "xhigh"                        # including "off" when enable_thinking forces thinking on
     out = {"enable_thinking": enable, "reasoning_effort": effort}
