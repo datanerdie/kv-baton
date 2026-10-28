@@ -1,4 +1,4 @@
-From dccdd834260525afc7726c05f0921b561f214c63 Mon Sep 17 00:00:00 2001
+From 6b908e96f96732409d733ceef5e92106f14096bf Mon Sep 17 00:00:00 2001
 From: kvh <kvh@localhost>
 Date: Wed, 7 Oct 2026 17:05:32 +0800
 Subject: [PATCH] KVH (local patch): POST /v1/kvh/import indexes an SSD-tier
@@ -11,7 +11,7 @@ Subject: [PATCH] KVH (local patch): POST /v1/kvh/import indexes an SSD-tier
  3 files changed, 69 insertions(+), 1 deletion(-)
 
 diff --git a/src/kv_disk_cache.zig b/src/kv_disk_cache.zig
-index 055ef45..33f8ff9 100644
+index 6658e1b..e6e13ee 100644
 --- a/src/kv_disk_cache.zig
 +++ b/src/kv_disk_cache.zig
 @@ -61,6 +61,16 @@ const io_util = @import("io_util.zig");
@@ -31,7 +31,7 @@ index 055ef45..33f8ff9 100644
  const KVCache = transformer_mod.KVCache;
  
  /// Restoring from disk only happens when it beats the best RAM match by at
-@@ -3730,7 +3740,8 @@ pub const DiskTier = struct {
+@@ -4063,7 +4073,8 @@ pub const DiskTier = struct {
              };
              self.total_bytes += p.e.bytes;
          }
@@ -41,7 +41,7 @@ index 055ef45..33f8ff9 100644
              log.info("  [disk-cache] scanned {d} persisted entries ({d:.1} MB) at {s}\n", .{
                  self.entries.items.len,
                  @as(f64, @floatFromInt(self.total_bytes)) / (1024.0 * 1024.0),
-@@ -3739,6 +3750,37 @@ pub const DiskTier = struct {
+@@ -4072,6 +4083,37 @@ pub const DiskTier = struct {
          }
      }
  
@@ -80,7 +80,7 @@ index 055ef45..33f8ff9 100644
      /// first entry to see an inode pays for it.
      fn billChunksOnce(self: *DiskTier, e: *IndexEntry, seen: *std.AutoHashMap(u64, void)) void {
 diff --git a/src/prefix_cache.zig b/src/prefix_cache.zig
-index 806bc35..5e8b3ed 100644
+index 8fc9959..625f1fd 100644
 --- a/src/prefix_cache.zig
 +++ b/src/prefix_cache.zig
 @@ -20,6 +20,7 @@ const transformer_mod = @import("transformer.zig");
@@ -91,20 +91,20 @@ index 806bc35..5e8b3ed 100644
  const io_util = @import("io_util.zig");
  const log = @import("log.zig");
  const restore_dump = @import("restore_dump.zig");
-@@ -1527,6 +1528,8 @@ pub const HotPrefixCache = struct {
-     ) !LookupResult {
+@@ -1638,6 +1639,8 @@ pub const HotPrefixCache = struct {
          self.last_restored_used = null;
          self.last_restored_disk_id = null;
+         self.last_restored_live = false;
 +        // KVH (local patch): index an entry queued by POST /v1/kvh/import before matching.
 +        if (self.disk) |*d| d.drainImport();
          if (skip) {
+             if (rec == .dsv41) self.live_dsv41.clear(self.allocator);
              try target_cache.truncate(0, s);
-             rec.reset();
 diff --git a/src/server.zig b/src/server.zig
-index 738d4df..ee05660 100644
+index 06e42d9..28796f4 100644
 --- a/src/server.zig
 +++ b/src/server.zig
-@@ -850,6 +850,7 @@ const ROUTE_PATHS = [_][]const u8{
+@@ -818,6 +818,7 @@ const ROUTE_PATHS = [_][]const u8{
      "/v1/chat/completions",
      "/v1/completions",
      "/v1/embeddings",
@@ -112,7 +112,7 @@ index 738d4df..ee05660 100644
      "/v1/load-model",
      "/v1/messages",
      "/v1/models",
-@@ -2702,6 +2703,11 @@ fn handleConnection(
+@@ -2665,6 +2666,11 @@ fn handleConnection(
          const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
          const body = request[header_end + 4 .. total_read];
          try handleResponses(allocator, stream, body, lm);
@@ -124,7 +124,7 @@ index 738d4df..ee05660 100644
      } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/tokenize")) {
          const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
          const body = request[header_end + 4 .. total_read];
-@@ -8657,6 +8663,23 @@ fn truncateEmbeddingDims(embedding: []f32, dims: usize) []f32 {
+@@ -9345,6 +9351,23 @@ fn truncateEmbeddingDims(embedding: []f32, dims: usize) []f32 {
      return out;
  }
  

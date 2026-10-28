@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import handoff  # noqa: E402
 from cache_index import best_restore, find_cache_root  # noqa: E402
 from gate import Gate  # noqa: E402
+from render import DEFAULT_EFFORTS  # noqa: E402
 
 # Thinking requests hand off since render.py follows Sushi's own thinking/effort rules (2026-10-07); False is the
 # kill switch that passes every thinking request through again.
@@ -67,7 +68,10 @@ LOG_SKIPS_FROM_TOKENS = int(os.environ.get("KVH_LOG_SKIPS_FROM_TOKENS", "2000"))
 # requests through); cache records without images stay v9 (v10 = media identity), fingerprint unchanged.
 # 1.3.0 (2026-10-22): chat.zig unchanged; "high"/"max" now fold to xhigh (render.py EFFORT_FOLDS); kv8 cache records
 # unchanged (kv6 added as its own width).
-VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.3.0")
+# 1.4.0 (2026-10-28): a request naming no thinking field thinks at medium (default_reasoning_effort "medium"; render.py
+# takes it as a parameter, _sushi_is_production keeps it in step); serializeMessagesJsonImpl changed for DeepSeek-V4.1
+# images only; cache manifests go to v11 (DeepSeek row segments), v8-v10 still load.
+VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.3.0", "1.4.0")
 # The converter assumes these Strata models (unsloth's GGUFs of the same checkpoint; YaRN 4, int8 KV: the session
 # layout does not depend on the weights' quantization) and an engine whose session file it reads (STRSESS v1).
 # 0.1.41 checked 2026-10-08: the session format only gained the opt-in pin=N / strata_prefix. UD-Q4_K_XL added
@@ -326,9 +330,14 @@ def make_server(port, upstream, renderer, cfg, steps, keepalive_s=10.0, think_ha
             if got[0] not in PRODUCTION_SUSHI_PACKS or got[1] != EXPECTED_SUSHI_CTX:
                 return False, (f"upstream is {got[0]!r} ctx {got[1]!r}, not a production Sushi pack "
                                f"{PRODUCTION_SUSHI_PACKS} at ctx {EXPECTED_SUSHI_CTX}")
-            effort = m.get("default_reasoning_effort")
-            if effort not in (None, "off"):    # sushi --think X changes the defaults render.py follows (1.2.0)
+            effort = m.get("default_reasoning_effort") or "off"     # not reported before 1.2.0
+            if effort not in DEFAULT_EFFORTS:  # sushi --think X changes the defaults render.py follows (1.2.0)
                 return False, f"Sushi's default reasoning effort is {effort!r} (--think), which the render does not model"
+            if renderer is not None and effort != getattr(renderer, "default_effort", "off"):
+                # "off" up to 1.3.0, "medium" since 1.4.0: after a version switch this request was rendered with the
+                # other default, so it passes through and the next one renders with Sushi's
+                old, renderer.default_effort = renderer.default_effort, effort
+                return False, f"Sushi's default reasoning effort is {effort!r}, the render assumed {old!r} (updated for the next request)"
             return True, ""
 
         def _sushi_tokenizes_alike(self, prepared):

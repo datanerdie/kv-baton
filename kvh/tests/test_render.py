@@ -91,6 +91,20 @@ def test_sushi_template_kwargs(extra, want):
     assert sushi_template_kwargs(body("x", **extra)) == want
 
 
+@pytest.mark.parametrize("extra, want", [
+    ({}, on("medium")),                                                                 # Sushi 1.4.0: silent = medium
+    ({"chat_template_kwargs": {"enable_thinking": True}}, on("medium")),                # no word: defaultEffortWord
+    ({"enable_thinking": True}, on("medium")),
+    ({"chat_template_kwargs": {"enable_thinking": False}}, OFF),
+    ({"reasoning_effort": "none"}, OFF),
+    ({"reasoning_effort": "low"}, on("low")),
+    ({"reasoning_effort": "xhigh"}, on("xhigh")),
+    ({"reasoning_effort": "off", "chat_template_kwargs": {"enable_thinking": True}}, on("xhigh")),
+])
+def test_sushi_template_kwargs_medium_default(extra, want):
+    assert sushi_template_kwargs(body("x", **extra), "medium") == want
+
+
 @pytest.mark.parametrize("word", ["high", "max"])
 def test_sushi_template_kwargs_folds_high_and_max_to_xhigh(word):   # Sushi 1.3.0 selectEffortPick
     assert sushi_template_kwargs(body("x", reasoning_effort=word)) == {"enable_thinking": True, "reasoning_effort": "xhigh"}

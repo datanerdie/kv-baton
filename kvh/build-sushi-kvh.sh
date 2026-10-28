@@ -4,7 +4,7 @@
 # No Xcode needed: only Sushi's Zig code is compiled; MLX/mlx-c are the prebuilt dylibs + metallib of the matching
 # release (its mlx-c patch only touches ops.cpp, so the headers of the pinned mlx-c commit fit). Needs brew webp.
 #   kvh/build-sushi-kvh.sh [DEST]
-#     SUSHI_VERSION  release tag without the v (default 1.3.0); the patch must apply to it
+#     SUSHI_VERSION  release tag without the v (default 1.4.0); the patch must apply to it
 #     SUSHI_REL_LIB  the release's lib folder (default ~/.local/opt/sushi-$SUSHI_VERSION-release/sushi-macos-arm64/lib,
 #                    else Homebrew's /opt/homebrew/Cellar/sushi/$SUSHI_VERSION/libexec/lib)
 #     DEST           default ~/.local/opt/sushi-$SUSHI_VERSION-kvh
@@ -14,8 +14,9 @@
 # 1.2.2 (2026-10-13) takes the 1.2.1 patch unchanged; 1.2.3 (2026-10-14) adds one hunk: the
 # `[disk-cache] scanned ... at <dir>` line is logged with 0 entries too, so the proxy finds a fresh cache root;
 # 1.2.4 (2026-10-17) and 1.3.0 (2026-10-22) take the 1.2.3 patch unchanged.
+# 1.4.0 (2026-10-28): the lookup hunk moved below the new `self.last_restored_live = false;` (context only).
 set -euo pipefail
-VER=${SUSHI_VERSION:-1.3.0}
+VER=${SUSHI_VERSION:-1.4.0}
 DEST=${1:-$HOME/.local/opt/sushi-$VER-kvh}
 PATCH=$(cd "$(dirname "$0")" && pwd)/sushi-kvh-import.patch
 REL=${SUSHI_REL_LIB:-$HOME/.local/opt/sushi-$VER-release/sushi-macos-arm64/lib}

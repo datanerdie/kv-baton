@@ -17,7 +17,9 @@ Thinking follows Sushi's own rules (1.1.1, unchanged in 1.2.0 to 1.3.0 while no 
 high/max -> xhigh fold) (server.zig resolveEnableThinking / parseReasoningEffort, chat.zig
 qwen38EffortFor), which differ from the template's defaults: `reasoning_effort` counts only at the top level (inside
 chat_template_kwargs it is ignored), thinking on without an effort word is "low", and a request naming neither is
-thinking off. Strata follows the template, so it gets the resolved settings written out explicitly.
+thinking off. Since 1.4.0 (3756e0a7) a request naming neither thinks at medium, and thinking on without an effort word
+is medium too: the default is a parameter (DEFAULT_EFFORTS). Strata follows the template, so it gets the resolved
+settings written out explicitly.
 """
 import hashlib
 import json
@@ -26,9 +28,11 @@ from dataclasses import dataclass
 
 SUSHI_MODEL_DIR = os.path.expanduser(os.environ.get("KVH_SUSHI_MODEL_DIR", "~/.sushi/models/Qwen3.8-Flash-Next-Sushi-4bpw"))
 
-# The pack's generation_config.json declares no thinking default, and qwen4_exp is not on Sushi's thinking-on
-# allowlist, so a request naming neither enable_thinking nor reasoning_effort runs thinking off (measured 2026-10-07).
-ARCH_DEFAULT_THINKING = False
+# What a request naming neither enable_thinking nor reasoning_effort gets, as Sushi's /v1/models reports it
+# (default_reasoning_effort, absent before 1.2.0): "off" up to 1.3.0 (measured 2026-10-07), "medium" since 1.4.0
+# (model.zig archDefaultArm; the pack's generation_config.json declares no default). The word is also the effort of
+# thinking on without an effort word ("off": low). The proxy keeps Renderer.default_effort in step with Sushi.
+DEFAULT_EFFORTS = ("off", "medium")
 # Sushi's effort table for qwen4_exp (model.zig qwen4_exp_efforts); "none" is an alias of off. Other words get a 400
 # (since 1.2.0 also "minimal", which 1.1.1 took as low).
 EFFORT_ARMS = ("off", "low", "medium", "xhigh")
@@ -135,8 +139,9 @@ def _tool_calls(calls):
     return out
 
 
-def sushi_template_kwargs(body):
-    """The template kwargs Sushi renders this request with, or None when Sushi would refuse it or it is not modelled."""
+def sushi_template_kwargs(body, default_effort="off"):
+    """The template kwargs Sushi renders this request with, or None when Sushi would refuse it or it is not modelled.
+    default_effort: Sushi's default_reasoning_effort, one of DEFAULT_EFFORTS."""
     if "reasoning" in body:
         return None
     kwargs = body.get("chat_template_kwargs")
@@ -161,11 +166,13 @@ def sushi_template_kwargs(body):
         effort_on = arm != "off"
 
     if et is None and word is None:
-        enable = ARCH_DEFAULT_THINKING
+        enable = default_effort != "off"
     else:
         enable = bool(et) or bool(effort_on)
 
-    if not enable or word is None or word in ("low", "none"):
+    if enable and word is None and default_effort != "off":
+        effort = default_effort                 # 1.4.0: chat passes defaultEffortWord when the request names none
+    elif not enable or word is None or word in ("low", "none"):
         effort = "low"
     elif word == "medium":
         effort = "medium"
@@ -186,6 +193,7 @@ class Renderer:
         h = lambda b: hashlib.sha256(b).hexdigest()[:16]
         # Every added token (special or not, e.g. <think>): the strings Sushi 1.2.4 keeps as text in client messages.
         self.control_texts = tuple(sorted({t.content for t in self.tok.added_tokens_decoder.values()}, key=len, reverse=True))
+        self.default_effort = os.environ.get("KVH_SUSHI_DEFAULT_EFFORT", "medium")   # Sushi 1.4.0's
         self.identity = {"template": h((self.tok.chat_template or "").encode()),
                          "tokenizer": h(open(tj, "rb").read()) if os.path.exists(tj) else None}
 
@@ -233,7 +241,7 @@ class Renderer:
             msgs.append(msg)
         if not msgs or msgs[-1]["role"] not in ("user", "tool"):
             return None, "no messages" if not msgs else f"last message is {msgs[-1]['role']}"
-        kw = sushi_template_kwargs(body)
+        kw = sushi_template_kwargs(body, self.default_effort)
         if kw is None:
             return None, "thinking settings Sushi refuses or this module does not model"
         text = self.tok.apply_chat_template(msgs, tools=tools or None, tokenize=False, add_generation_prompt=True, **kw)

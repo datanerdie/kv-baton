@@ -236,3 +236,17 @@ After a few suspend/resume cycles of the GPU box, Strata answered a 23-token pro
 ## Sushi 1.3.0 (2026-10-22)
 
 **Sushi 1.3.0** (kvh build, in production since 2026-10-22). The import patch applies unchanged. Rendering for Qwen is unchanged (`chat.zig` untouched) with one exception: an effort word the model lacks is now served at the nearest arm instead of a 400, so `high` and `max` run as `xhigh` (the response carries an `effort_notice`); `kvh/render.py` folds them the same way, so such requests now hand off. The kv8 cache records are unchanged (the new `--kv-quant 6` is stored as its own width), so existing entries survive the upgrade. Also new: MTP now stays on for requests with a presence or repeat penalty (Sushi applies the penalty to each verify row exactly); a client that relied on a penalty turning drafting off can send `enable_mtp: false`, which runs plain decoding as before (prompt lookup only runs inside the MTP round). KLD against a BF16 teacher (24 prompts) is identical to 1.2.4 on every prompt; the KV round trip after a restart reprocessed 31 of 8,740 tokens and tool calls passed 28/28. Live ~20K handoffs: plain, Sushi restored 20,410 cached tokens against a restore point of 20,409 (18.2 s); tools, 20,654 against 20,653 and the model called the tool (17.2 s); thinking, 20,400 against 20,397, correct answer (21.1 s); a `reasoning_effort: "high"` request handed off and restored 20,433 against 20,430, served at xhigh. The proxy now accepts 1.3.0.
+
+## Sushi 1.4.0 (2026-10-28)
+
+**Sushi 1.4.0** (kvh build, in production since 2026-10-28). The import patch needed one context change: the lookup hunk now sits below the new `self.last_restored_live = false;`; the other hunks apply at offsets. Cache manifests go to v11 (DeepSeek-V4.1 row segments); v2 to v11 load, so the converter's v8 entries still work, and the cache fingerprint is unchanged, so existing entries survive the upgrade.
+
+**Rendering change:** a request naming no thinking field now thinks at **medium**, and `enable_thinking: true` with no effort word now runs at medium instead of low. `/v1/models` reports `default_reasoning_effort: "medium"`. `kvh/render.py` takes the default as a parameter (`DEFAULT_EFFORTS` "off" / "medium"; `Renderer.default_effort`, initially medium, `KVH_SUSHI_DEFAULT_EFFORT` overrides it). The proxy accepts either value and keeps the render in step: after a Sushi version switch the first big request passes through and the render adopts the reported default. The `serializeMessagesJsonImpl` change affects DeepSeek-V4.1 images only.
+
+**Checks:**
+- KLD against a BF16 teacher (24 prompts) is identical to 1.3.0 on every prompt.
+- The KV round trip after a restart reprocessed 31 of 8,740 tokens; tool calls 28/28 with thinking off.
+- Render vs Sushi prompt length agrees for 7 thinking cases: no field, `enable_thinking` true and false, kwargs, and low / medium / xhigh.
+- **No live handoff test yet:** the GPU box was switched off.
+
+**Tool-test finding:** a tool test that sends only `think` / `thinking` (fields Sushi does not read) ran thinking off up to 1.3.0 and runs at medium on 1.4.0. With thinking on, Qwen refuses to echo a fake DSML tag in one case (24/28). 1.3.0 at explicit medium scores the same, so this is not a regression; send `enable_thinking: false` to compare with earlier runs.

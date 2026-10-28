@@ -70,9 +70,9 @@ class FakeSushi:
 
 class FakeRenderer:
     """n token ids, the real thinking resolution; the text is the ids, so FakeSushi's /tokenize can echo them."""
-    def __init__(self, n): self.n = n
+    def __init__(self, n): self.n, self.default_effort = n, "off"
     def prepare_why(self, body):
-        kw = sushi_template_kwargs(body)
+        kw = sushi_template_kwargs(body, self.default_effort)
         if kw is None:
             return None, "thinking settings"
         ids = list(range(body.get("_n", self.n)))        # a test can size one request with "_n"
@@ -376,6 +376,17 @@ def test_bigdoc_hands_off_when_models_match(setup, effort):
     if effort:
         up.models["data"][0]["default_reasoning_effort"] = effort      # what sushi 1.2.0 reports without --think
     log = []; url, _ = start(500, steps(log, 500))
+    post(url, BIG)
+    assert log == ["prefill", "save", "dump", "convert", "restart"]
+
+
+def test_bigdoc_learns_sushis_default_effort(setup, tmp_path):
+    """1.4.0 reports "medium" where the render assumed "off": that request passes through, the next one hands off."""
+    up, start = setup
+    up.models["data"][0]["default_reasoning_effort"] = "medium"
+    log = []; url, _ = start(500, steps(log, 500))
+    post(url, BIG)
+    assert log == [] and "the render assumed 'off'" in (tmp_path / "handoff_proxy-test.log").read_text()
     post(url, BIG)
     assert log == ["prefill", "save", "dump", "convert", "restart"]
 
