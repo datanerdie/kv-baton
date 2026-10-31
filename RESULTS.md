@@ -250,3 +250,16 @@ After a few suspend/resume cycles of the GPU box, Strata answered a 23-token pro
 - **No live handoff test yet:** the GPU box was switched off.
 
 **Tool-test finding:** a tool test that sends only `think` / `thinking` (fields Sushi does not read) ran thinking off up to 1.3.0 and runs at medium on 1.4.0. With thinking on, Qwen refuses to echo a fake DSML tag in one case (24/28). 1.3.0 at explicit medium scores the same, so this is not a regression; send `enable_thinking: false` to compare with earlier runs.
+
+## Sushi 1.4.1 (2026-10-31)
+
+**Sushi 1.4.1** (kvh build, in production since 2026-10-31). Routing moved out of `server.zig`, so the import patch was re-placed: the path joins `ROUTE_PATHS` in `http_conn.zig`, the dispatch arm follows `/v1/responses`, and `handleKvhImport` (now taking `*http_conn.Conn`) sits before `handleTokenize`, because its old anchor went with `/v1/embeddings`. The cache hunks merge unchanged, and `importEntry` still repeats the startup scan's per-entry steps. `tokens.bin` is now append-only and is read up to the manifest's count; the converter's exact-length file still fits, and no manifest field changed.
+
+**Rendering: no change.** The thinking and effort code moved to `request_policy.zig` and `effort.zig` byte-identically: same efforts (off / low 2048 / medium 8192 / xhigh), default medium. The serializer lost only Harmony's empty-string content and the `'ifm|think'` reasoning field, neither of which applies to Qwen.
+
+**Checks:**
+- KLD against a BF16 teacher (24 prompts) is identical to 1.4.0 on every prompt.
+- Render vs Sushi prompt length agrees in 7/7 thinking cases.
+- The KV round trip after a restart reprocessed 31 of 8,740 tokens; tool calls 28/28 with thinking off.
+- A greedy A/B against 1.4.0 (2 prompts, thinking off and medium) gave byte-identical output, and decode differed only within noise.
+- **No live handoff test yet:** the GPU box is switched off.

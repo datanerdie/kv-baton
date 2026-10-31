@@ -1,22 +1,35 @@
-From 6b908e96f96732409d733ceef5e92106f14096bf Mon Sep 17 00:00:00 2001
+From e513fc6eff12a1d630fc221235d6720b5e59983f Mon Sep 17 00:00:00 2001
 From: kvh <kvh@localhost>
 Date: Wed, 7 Oct 2026 17:05:32 +0800
 Subject: [PATCH] KVH (local patch): POST /v1/kvh/import indexes an SSD-tier
  entry written while the server runs
 
 ---
+ src/http_conn.zig     |  1 +
  src/kv_disk_cache.zig | 44 ++++++++++++++++++++++++++++++++++++++++++-
  src/prefix_cache.zig  |  3 +++
- src/server.zig        | 23 ++++++++++++++++++++++
- 3 files changed, 69 insertions(+), 1 deletion(-)
+ src/server.zig        | 22 ++++++++++++++++++++++
+ 4 files changed, 69 insertions(+), 1 deletion(-)
 
+diff --git a/src/http_conn.zig b/src/http_conn.zig
+index 2b25a5a7..0daee621 100644
+--- a/src/http_conn.zig
++++ b/src/http_conn.zig
+@@ -410,6 +410,7 @@ const ROUTE_PATHS = [_][]const u8{
+     "/tokenize",
+     "/v1/chat/completions",
+     "/v1/completions",
++    "/v1/kvh/import", // KVH (local patch)
+     "/v1/load-model",
+     "/v1/messages",
+     "/v1/messages/count_tokens",
 diff --git a/src/kv_disk_cache.zig b/src/kv_disk_cache.zig
-index 6658e1b..e6e13ee 100644
+index d9386f2c..a08c9e14 100644
 --- a/src/kv_disk_cache.zig
 +++ b/src/kv_disk_cache.zig
-@@ -61,6 +61,16 @@ const io_util = @import("io_util.zig");
- const disk_writer = @import("kv_disk_writer.zig");
+@@ -62,6 +62,16 @@ const write_stats = @import("disk_write_stats.zig");
  const log = @import("log.zig");
+ const disk_placement = @import("disk_placement.zig");
  
 +// KVH (local patch, not upstream): an entry id written into the SSD tier by another program
 +// (the handoff proxy) while the server runs. HTTP threads only store the id here; the
@@ -31,7 +44,7 @@ index 6658e1b..e6e13ee 100644
  const KVCache = transformer_mod.KVCache;
  
  /// Restoring from disk only happens when it beats the best RAM match by at
-@@ -4063,7 +4073,8 @@ pub const DiskTier = struct {
+@@ -3829,7 +3839,8 @@ pub const DiskTier = struct {
              };
              self.total_bytes += p.e.bytes;
          }
@@ -41,7 +54,7 @@ index 6658e1b..e6e13ee 100644
              log.info("  [disk-cache] scanned {d} persisted entries ({d:.1} MB) at {s}\n", .{
                  self.entries.items.len,
                  @as(f64, @floatFromInt(self.total_bytes)) / (1024.0 * 1024.0),
-@@ -4072,6 +4083,37 @@ pub const DiskTier = struct {
+@@ -3838,6 +3849,37 @@ pub const DiskTier = struct {
          }
      }
  
@@ -80,10 +93,10 @@ index 6658e1b..e6e13ee 100644
      /// first entry to see an inode pays for it.
      fn billChunksOnce(self: *DiskTier, e: *IndexEntry, seen: *std.AutoHashMap(u64, void)) void {
 diff --git a/src/prefix_cache.zig b/src/prefix_cache.zig
-index 8fc9959..625f1fd 100644
+index 10cd6073..7956aed5 100644
 --- a/src/prefix_cache.zig
 +++ b/src/prefix_cache.zig
-@@ -20,6 +20,7 @@ const transformer_mod = @import("transformer.zig");
+@@ -19,6 +19,7 @@ const transformer_mod = @import("transformer.zig");
  const model_mod = @import("model.zig");
  const kv_quant = @import("kv_quant.zig");
  const kv_disk_cache = @import("kv_disk_cache.zig");
@@ -91,7 +104,7 @@ index 8fc9959..625f1fd 100644
  const io_util = @import("io_util.zig");
  const log = @import("log.zig");
  const restore_dump = @import("restore_dump.zig");
-@@ -1638,6 +1639,8 @@ pub const HotPrefixCache = struct {
+@@ -1437,6 +1438,8 @@ pub const HotPrefixCache = struct {
          self.last_restored_used = null;
          self.last_restored_disk_id = null;
          self.last_restored_live = false;
@@ -101,21 +114,13 @@ index 8fc9959..625f1fd 100644
              if (rec == .dsv41) self.live_dsv41.clear(self.allocator);
              try target_cache.truncate(0, s);
 diff --git a/src/server.zig b/src/server.zig
-index 06e42d9..28796f4 100644
+index 6c5a6510..25a700eb 100644
 --- a/src/server.zig
 +++ b/src/server.zig
-@@ -818,6 +818,7 @@ const ROUTE_PATHS = [_][]const u8{
-     "/v1/chat/completions",
-     "/v1/completions",
-     "/v1/embeddings",
-+    "/v1/kvh/import", // KVH (local patch)
-     "/v1/load-model",
-     "/v1/messages",
-     "/v1/models",
-@@ -2665,6 +2666,11 @@ fn handleConnection(
+@@ -1928,6 +1928,11 @@ pub fn handleConnection(
          const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
          const body = request[header_end + 4 .. total_read];
-         try handleResponses(allocator, stream, body, lm);
+         try responses_api.handleResponses(allocator, stream, body, lm);
 +    } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/v1/kvh/import")) {
 +        // KVH (local patch): queue an SSD-tier entry id for import at the next prefix lookup.
 +        const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
@@ -124,11 +129,11 @@ index 06e42d9..28796f4 100644
      } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/tokenize")) {
          const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
          const body = request[header_end + 4 .. total_read];
-@@ -9345,6 +9351,23 @@ fn truncateEmbeddingDims(embedding: []f32, dims: usize) []f32 {
-     return out;
+@@ -7236,6 +7241,23 @@ fn handleUpdate(allocator: std.mem.Allocator, stream: *http_conn.Conn, headers:
+     shutdown_requested.store(true, .release);
  }
  
-+fn handleKvhImport(allocator: std.mem.Allocator, stream: *Conn, body: []const u8) !void {
++fn handleKvhImport(allocator: std.mem.Allocator, stream: *http_conn.Conn, body: []const u8) !void {
 +    const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch {
 +        try sendErrorResponse(allocator, stream, "400 Bad Request", "invalid_request_error", "Invalid JSON", 400);
 +        return;
@@ -147,7 +152,7 @@ index 06e42d9..28796f4 100644
 +
  fn handleTokenize(
      allocator: std.mem.Allocator,
-     stream: *Conn,
+     stream: *http_conn.Conn,
 -- 
 2.56.0
 
