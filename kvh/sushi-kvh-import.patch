@@ -111,7 +111,7 @@ index 10cd6073..7956aed5 100644
 +        // KVH (local patch): index an entry queued by POST /v1/kvh/import before matching.
 +        if (self.disk) |*d| d.drainImport();
          if (skip) {
-             if (rec == .dsv41) self.live_dsv41.clear(self.allocator);
+             if (rec == .dsv41) self.releaseLive(rec.dsv41, s, "handover");
              try target_cache.truncate(0, s);
 diff --git a/src/server.zig b/src/server.zig
 index 6c5a6510..25a700eb 100644

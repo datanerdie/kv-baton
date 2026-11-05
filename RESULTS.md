@@ -263,3 +263,16 @@ After a few suspend/resume cycles of the GPU box, Strata answered a 23-token pro
 - The KV round trip after a restart reprocessed 31 of 8,740 tokens; tool calls 28/28 with thinking off.
 - A greedy A/B against 1.4.0 (2 prompts, thinking off and medium) gave byte-identical output, and decode differed only within noise.
 - **No live handoff test yet:** the GPU box is switched off.
+
+## Sushi 1.5.0 (2026-11-05)
+
+**Sushi 1.5.0** (kvh build, in production since 2026-11-05). One context line of the import patch changed: where the lookup's skip branch cleared the DeepSeek live state it now calls `self.releaseLive(rec.dsv41, s, "handover")`; the `drainImport` hunk above it is unchanged. The startup scan's per-entry loop, which `importEntry` repeats, is byte-identical to 1.4.1, and `billChunksOnce` (which now bills grown segments by inode) is called rather than copied, so the import follows it. The cache rework in this release (hard-linked row segments, namespace `dsv41-state-v4`) is DeepSeek-only: Qwen manifests still load v2 to v11, and an existing Qwen cache is read at start.
+
+**Rendering: no change.** Same efforts (off / low 2048 / medium 8192 / xhigh), default medium. New admin routes `/v1/prefix-cache`, `/v1/prefix-cache/clear` and `/v1/settings` don't affect the proxy.
+
+**Checks:**
+- KLD against a BF16 teacher (24 prompts) is identical to 1.4.1 on every prompt.
+- Render vs Sushi prompt length agrees in 7/7 thinking cases.
+- The KV round trip after a restart reprocessed 31 of 8,740 tokens; tool calls 28/28 with thinking off.
+- A greedy A/B against 1.4.1 (2 prompts, thinking off and medium) gave byte-identical output, and decode differed only within noise.
+- **No live handoff test yet:** the GPU box is switched off.
