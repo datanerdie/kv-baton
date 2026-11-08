@@ -77,7 +77,10 @@ LOG_SKIPS_FROM_TOKENS = int(os.environ.get("KVH_LOG_SKIPS_FROM_TOKENS", "2000"))
 # 1.5.0 (2026-11-05): render code unchanged (7/7 prompt lengths, efforts and budgets as 1.4.1); the cache rework is
 # DeepSeek-only (namespace dsv41-state-v4, hard-linked row segments); Qwen manifests still v2-v11, `grown.inherited`
 # is optional, scan's per-entry steps unchanged; new admin routes /v1/prefix-cache and /v1/settings.
-VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.3.0", "1.4.0", "1.4.1", "1.5.0")
+# 1.5.1 (2026-11-07): the effort table became a Settings entry (same words, budgets low 2048 / medium 8192 and default
+# medium; /v1/models adds reasoning_effort_values), render 7/7 prompt lengths, KLD identical per prompt; follow-up
+# turns restore the previous reply; RAM-cache eviction trims to a restore point; scan's per-entry steps unchanged.
+VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.3.0", "1.4.0", "1.4.1", "1.5.0", "1.5.1")
 # The converter assumes these Strata models (unsloth's GGUFs of the same checkpoint; YaRN 4, int8 KV: the session
 # layout does not depend on the weights' quantization) and an engine whose session file it reads (STRSESS v1).
 # 0.1.41 checked 2026-10-08: the session format only gained the opt-in pin=N / strata_prefix. UD-Q4_K_XL added

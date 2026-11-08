@@ -276,3 +276,17 @@ After a few suspend/resume cycles of the GPU box, Strata answered a 23-token pro
 - The KV round trip after a restart reprocessed 31 of 8,740 tokens; tool calls 28/28 with thinking off.
 - A greedy A/B against 1.4.1 (2 prompts, thinking off and medium) gave byte-identical output, and decode differed only within noise.
 - **No live handoff test yet:** the GPU box is switched off.
+
+## Sushi 1.5.1 (2026-11-07)
+
+**Sushi 1.5.1** (kvh build, in production since 2026-11-07), built against the 1.5.0 release libraries since the mlx and mlx-c pins are unchanged. The only patch change is context: `ROUTE_PATHS` in `src/http_conn.zig` gained `/v1/downloads` and `/v1/downloads/cancel` next to our path. The cache hunks apply unchanged. `kv_disk_cache.zig` only gained eviction counters, so the startup scan's per-entry loop, which `importEntry` repeats, is unchanged. The `drainImport` call sits in the same place in `lookup()`, even though the RAM cache was reworked (eviction now trims an idle entry to a restore point).
+
+**Rendering: no change.** The effort table became a Settings entry (`--reasoning-budget` was removed). `/v1/models` reports the same efforts (off / low 2048 / medium 8192 / xhigh) and default (medium), plus a new `reasoning_effort_values` field. The proxy now accepts 1.5.1.
+
+**Checks:**
+- KLD against a BF16 teacher (24 prompts) is identical to 1.5.0 on every prompt.
+- Render vs Sushi prompt length agrees in 7/7 thinking cases.
+- The KV round trip after a restart reprocessed 31 of 8,740 tokens; tool calls 28/28 with thinking off.
+- A greedy A/B against 1.5.0 was **not** byte-identical, but 1.5.0 doesn't repeat itself either: two 1.5.0 runs differed on 2 of 4 prompts, because greedy output depends on the prompt-cache state. The divergences are near-tie words and stay the same with MTP off, so drafting isn't the cause; decode without drafting is the same on both. The earlier "byte-identical" results were fresh-cache luck, so per-prompt KLD is the equality test from now on.
+- New in 1.5.1: a follow-up turn reuses the previous reply (1,323 of 1,345 prompt tokens cached on turn 2).
+- **No live handoff test yet:** the GPU box is switched off.
