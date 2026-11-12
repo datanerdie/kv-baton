@@ -80,7 +80,10 @@ LOG_SKIPS_FROM_TOKENS = int(os.environ.get("KVH_LOG_SKIPS_FROM_TOKENS", "2000"))
 # 1.5.1 (2026-11-07): the effort table became a Settings entry (same words, budgets low 2048 / medium 8192 and default
 # medium; /v1/models adds reasoning_effort_values), render 7/7 prompt lengths, KLD identical per prompt; follow-up
 # turns restore the previous reply; RAM-cache eviction trims to a restore point; scan's per-entry steps unchanged.
-VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.3.0", "1.4.0", "1.4.1", "1.5.0", "1.5.1")
+# 1.6.0 (2026-11-12): render code unchanged (7/7 prompt lengths, efforts and budgets as 1.5.1), KLD identical per
+# prompt; the SSD tier defaults to a content-addressed layer that deletes plain e<id> entries at start and cannot see
+# the converter's plain files, so run 1.6.0 with SUSHI_PREFIX_FS=real; scan's per-entry steps unchanged.
+VALIDATED_SUSHI_VERSIONS = ("1.1.1", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4", "1.3.0", "1.4.0", "1.4.1", "1.5.0", "1.5.1", "1.6.0")
 # The converter assumes these Strata models (unsloth's GGUFs of the same checkpoint; YaRN 4, int8 KV: the session
 # layout does not depend on the weights' quantization) and an engine whose session file it reads (STRSESS v1).
 # 0.1.41 checked 2026-10-08: the session format only gained the opt-in pin=N / strata_prefix. UD-Q4_K_XL added

@@ -1,4 +1,4 @@
-From f522d60fc62f49981d50cff3f8cde3993773bab4 Mon Sep 17 00:00:00 2001
+From 757fbdf101377b0a16eb8327f287f3e352ae1a07 Mon Sep 17 00:00:00 2001
 From: kvh <kvh@localhost>
 Date: Sat, 7 Nov 2026 11:05:56 +0800
 Subject: [PATCH] KVH (local patch): POST /v1/kvh/import indexes an SSD-tier
@@ -12,10 +12,10 @@ Subject: [PATCH] KVH (local patch): POST /v1/kvh/import indexes an SSD-tier
  4 files changed, 69 insertions(+), 1 deletion(-)
 
 diff --git a/src/http_conn.zig b/src/http_conn.zig
-index 74172ca8..165a6441 100644
+index 8a1d6a4b..8a7ce2f0 100644
 --- a/src/http_conn.zig
 +++ b/src/http_conn.zig
-@@ -415,6 +415,7 @@ const ROUTE_PATHS = [_][]const u8{
+@@ -426,6 +426,7 @@ const ROUTE_PATHS = [_][]const u8{
      "/v1/completions",
      "/v1/downloads",
      "/v1/downloads/cancel",
@@ -24,12 +24,12 @@ index 74172ca8..165a6441 100644
      "/v1/messages",
      "/v1/messages/count_tokens",
 diff --git a/src/kv_disk_cache.zig b/src/kv_disk_cache.zig
-index 4a894df9..46e7803e 100644
+index c5509625..6c7a167d 100644
 --- a/src/kv_disk_cache.zig
 +++ b/src/kv_disk_cache.zig
-@@ -63,6 +63,16 @@ const cache_stats = @import("cache_stats.zig");
- const log = @import("log.zig");
- const disk_placement = @import("disk_placement.zig");
+@@ -66,6 +66,16 @@ const disk_format = @import("disk_format.zig");
+ const kv_disk_fs = @import("kv_disk_fs.zig");
+ const vt = @import("prefix_vfs_tensors.zig");
  
 +// KVH (local patch, not upstream): an entry id written into the SSD tier by another program
 +// (the handoff proxy) while the server runs. HTTP threads only store the id here; the
@@ -41,10 +41,10 @@ index 4a894df9..46e7803e 100644
 +    kvh_pending_import.store(id, .release);
 +}
 +
- const KVCache = transformer_mod.KVCache;
+ const KVCache = trunk.KVCache;
  
  /// Restoring from disk only happens when it beats the best RAM match by at
-@@ -3914,7 +3924,8 @@ pub const DiskTier = struct {
+@@ -4256,7 +4266,8 @@ pub const DiskTier = struct {
              };
              self.total_bytes += p.e.bytes;
          }
@@ -54,7 +54,7 @@ index 4a894df9..46e7803e 100644
              log.info("  [disk-cache] scanned {d} persisted entries ({d:.1} MB) at {s}\n", .{
                  self.entries.items.len,
                  @as(f64, @floatFromInt(self.total_bytes)) / (1024.0 * 1024.0),
-@@ -3923,6 +3934,37 @@ pub const DiskTier = struct {
+@@ -4265,6 +4276,37 @@ pub const DiskTier = struct {
          }
      }
  
@@ -93,31 +93,31 @@ index 4a894df9..46e7803e 100644
      /// first entry to see an inode pays for it.
      fn billChunksOnce(self: *DiskTier, e: *IndexEntry, seen: *std.AutoHashMap(u64, void)) void {
 diff --git a/src/prefix_cache.zig b/src/prefix_cache.zig
-index b325d70e..cfafc44e 100644
+index 74e1cd1e..f676cf52 100644
 --- a/src/prefix_cache.zig
 +++ b/src/prefix_cache.zig
-@@ -19,6 +19,7 @@ const transformer_mod = @import("transformer.zig");
- const model_mod = @import("model.zig");
+@@ -21,6 +21,7 @@ const model_mod = @import("model.zig");
  const kv_quant = @import("kv_quant.zig");
  const kv_disk_cache = @import("kv_disk_cache.zig");
+ const kv_disk_fs = @import("kv_disk_fs.zig");
 +pub const kvhQueueImport = kv_disk_cache.kvhQueueImport; // KVH (local patch)
  const io_util = @import("io_util.zig");
  const log = @import("log.zig");
  const restore_dump = @import("restore_dump.zig");
-@@ -1455,6 +1456,8 @@ pub const HotPrefixCache = struct {
+@@ -1385,6 +1386,8 @@ pub const HotPrefixCache = struct {
          self.last_restored_used = null;
          self.last_restored_disk_id = null;
          self.last_restored_live = false;
 +        // KVH (local patch): index an entry queued by POST /v1/kvh/import before matching.
 +        if (self.disk) |*d| d.drainImport();
          if (skip) {
-             if (rec == .dsv41) self.releaseLive(rec.dsv41, s, "handover");
+             if (rec == .arch) prefix_arch.handover(self, rec.arch, s);
              try target_cache.truncate(0, s);
 diff --git a/src/server.zig b/src/server.zig
-index a3671b48..a3e28658 100644
+index b6bb0f2d..6f424b68 100644
 --- a/src/server.zig
 +++ b/src/server.zig
-@@ -2079,6 +2079,11 @@ pub fn handleConnection(
+@@ -1642,6 +1642,11 @@ pub fn handleConnection(
          const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
          const body = request[header_end + 4 .. total_read];
          try responses_api.handleResponses(allocator, stream, body, lm);
@@ -129,8 +129,8 @@ index a3671b48..a3e28658 100644
      } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/tokenize")) {
          const header_end = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
          const body = request[header_end + 4 .. total_read];
-@@ -7460,6 +7465,23 @@ fn handleUpdate(allocator: std.mem.Allocator, stream: *http_conn.Conn, headers:
-     shutdown_requested.store(true, .release);
+@@ -2176,6 +2181,23 @@ fn handleUpdate(allocator: std.mem.Allocator, stream: *http_conn.Conn, headers:
+     server_state.shutdown_requested.store(true, .release);
  }
  
 +fn handleKvhImport(allocator: std.mem.Allocator, stream: *http_conn.Conn, body: []const u8) !void {
@@ -144,7 +144,7 @@ index a3671b48..a3e28658 100644
 +        try sendErrorResponse(allocator, stream, "400 Bad Request", "invalid_request_error", "'id' (a positive integer) is required", 400);
 +        return;
 +    }
-+    prefix_cache_mod.kvhQueueImport(@intCast(id_v.?.integer));
++    @import("prefix_cache.zig").kvhQueueImport(@intCast(id_v.?.integer)); // 1.6.0 dropped server.zig's prefix_cache import
 +    var buf: [64]u8 = undefined;
 +    const out = std.fmt.bufPrint(&buf, "{{\"queued\":{d}}}", .{id_v.?.integer}) catch "{}";
 +    try sendResponse(stream, "200 OK", "application/json", out);
@@ -154,5 +154,5 @@ index a3671b48..a3e28658 100644
      allocator: std.mem.Allocator,
      stream: *http_conn.Conn,
 -- 
-2.56.0
+2.56.1
 

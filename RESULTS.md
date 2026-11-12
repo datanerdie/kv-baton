@@ -290,3 +290,21 @@ After a few suspend/resume cycles of the GPU box, Strata answered a 23-token pro
 - A greedy A/B against 1.5.0 was **not** byte-identical, but 1.5.0 doesn't repeat itself either: two 1.5.0 runs differed on 2 of 4 prompts, because greedy output depends on the prompt-cache state. The divergences are near-tie words and stay the same with MTP off, so drafting isn't the cause; decode without drafting is the same on both. The earlier "byte-identical" results were fresh-cache luck, so per-prompt KLD is the equality test from now on.
 - New in 1.5.1: a follow-up turn reuses the previous reply (1,323 of 1,345 prompt tokens cached on turn 2).
 - **No live handoff test yet:** the GPU box is switched off.
+
+## Sushi 1.6.0 (2026-11-12)
+
+**Sushi 1.6.0** with the kvh patch. Same mlx and mlx-c pins as 1.5.1. The patch conflicts in `kv_disk_cache.zig` and `prefix_cache.zig` are import lines moved by the prefix-cache refactor. One real change: the new unused-import lint removed `server.zig`'s `prefix_cache` import, so `handleKvhImport` imports it inline. `scan`'s per-entry loop (loadEntry, bump, billChunksOnce, append) is unchanged, so `importEntry` still mirrors it.
+
+**SSD tier: run it with `SUSHI_PREFIX_FS=real`.** 1.6.0 stores the SSD tier in a content-addressed layer (`<root>/v`) by default. With that layer it deletes every plain `e<id>` directory when it starts (a whole existing cache) and cannot see the plain files `strata_to_sushi.py` writes, so an imported entry would never load. `SUSHI_PREFIX_FS=real` keeps the plain files: the existing cache is kept, the v8 entries load, and the log says `background writer armed (fs=real, ...)`. Upstream plans to remove `real` in a later stage; writing into the new layer is the follow-up.
+
+**Rendering: no change.** `/v1/models` reports the same efforts (off/low/medium/xhigh), budgets (low 2048 / medium 8192) and default (medium). The proxy accepts 1.6.0.
+
+**Checks:**
+- The pack's KLD against a BF16 teacher (24 prompts, KV 16) is identical to 1.5.1 on all 24 prompts.
+- Render vs Sushi prompt length agrees in 7/7 cases (default, off, low, medium, xhigh, `enable_thinking` kwarg, tools + history).
+- Tests: 215 passed, 2 skipped (private suite). A restart cycle reprocessed 31 of 8,740 tokens, and tool calls passed 28/28.
+- Follow-up turns reuse the previous reply (224 of 244 prompt tokens with thinking off), **except with `enable_mtp: false` in the request**: then only the first few tokens match (4–29), on 1.5.1 too.
+- **No live handoff test:** the GPU box was off.
+
+**Caution for test servers:** Sushi's SSD cache is on by default, at a directory derived from the pack. A second Sushi started for a test on the same pack while the main one is stopped takes the same directory and trims it to its own, smaller default budget. Start test servers with `--prefix-cache-disk off` or a separate `SUSHI_PREFIX_CACHE_DIR`.
+

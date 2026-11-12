@@ -4,7 +4,7 @@
 # No Xcode needed: only Sushi's Zig code is compiled; MLX/mlx-c are the prebuilt dylibs + metallib of the matching
 # release (its mlx-c patch only touches ops.cpp, so the headers of the pinned mlx-c commit fit). Needs brew webp.
 #   kvh/build-sushi-kvh.sh [DEST]
-#     SUSHI_VERSION  release tag without the v (default 1.5.1); the patch must apply to it
+#     SUSHI_VERSION  release tag without the v (default 1.6.0); the patch must apply to it
 #     SUSHI_REL_LIB  the release's lib folder (default ~/.local/opt/sushi-$SUSHI_VERSION-release/sushi-macos-arm64/lib,
 #                    else Homebrew's /opt/homebrew/Cellar/sushi/$SUSHI_VERSION/libexec/lib)
 #     DEST           default ~/.local/opt/sushi-$SUSHI_VERSION-kvh
@@ -23,8 +23,14 @@
 # 1.5.1 (2026-11-07): ROUTE_PATHS gained /v1/downloads and /v1/downloads/cancel next to our path (context only); the
 # cache hunks apply unchanged and scan's per-entry loop is unchanged (kv_disk_cache.zig only gained eviction counters).
 # Same mlx / mlx-c pins as 1.5.0, so SUSHI_REL_LIB can point at the 1.5.0 release libs.
+# 1.6.0 (2026-11-12): the prefix-cache refactor moved imports around (kv_disk_cache.zig now imports trunk/disk_format/
+# kv_disk_fs; prefix_cache.zig kv_disk_fs) and the unused-import lint dropped server.zig's prefix_cache import, so
+# handleKvhImport calls @import("prefix_cache.zig") inline. scan's per-entry loop (loadEntry, bump, billChunksOnce,
+# append) is unchanged, so importEntry still mirrors it. The tier now defaults to the content-addressed layer
+# (SUSHI_PREFIX_FS unset = cas), which deletes plain e<id> dirs at start and can't see strata_to_sushi's plain files:
+# the restart command runs it with SUSHI_PREFIX_FS=real. Same mlx / mlx-c pins as 1.5.1 (Homebrew's 1.6.0 Cellar libs used).
 set -euo pipefail
-VER=${SUSHI_VERSION:-1.5.1}
+VER=${SUSHI_VERSION:-1.6.0}
 DEST=${1:-$HOME/.local/opt/sushi-$VER-kvh}
 PATCH=$(cd "$(dirname "$0")" && pwd)/sushi-kvh-import.patch
 REL=${SUSHI_REL_LIB:-$HOME/.local/opt/sushi-$VER-release/sushi-macos-arm64/lib}
